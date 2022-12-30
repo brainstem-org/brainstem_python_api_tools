@@ -4,7 +4,7 @@ from stem_get_app_from_model import stem_get_app_from_model
 
 def put_model (settings, portal, app, model, data, options=""):
 	request_url = settings.address + portal + "/" + app + "/" + model + "/" + options + "/"
-	response = requests.put(request_url, json=data, headers={"Authorization": "Basic %s" % settings.credentials})
+	response = requests.patch(request_url, json=data, headers={"Authorization": "Basic %s" % settings.credentials})
 
 	return response.json()
 
