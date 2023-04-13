@@ -13,7 +13,6 @@ class StemSettings:
 		path = os.path.dirname(os.path.abspath(__file__))
 		try:
 			self.credentials = loadmat(path+"/brainstem_credentials_encoded.mat")["credentials"][0]
-			print(self.credentials)
 		except FileNotFoundError:
 			username = input("Please enter your username:")
 			password = getpass("Please enter your password:")
