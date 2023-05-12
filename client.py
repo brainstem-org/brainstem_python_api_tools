@@ -1,9 +1,9 @@
 import os
 from getpass import getpass
 import requests
+from requests.models import Response
 import json
 from enum import Enum
-from typing import List, Dict, Union
 
 
 class ModelType(Enum):
@@ -41,41 +41,41 @@ class ModelType(Enum):
 class PortalType(Enum):
     public = "public"
     private = "private"
+    super = "super"
 
 
-class StemClient:
+class LoginError(Exception):
+    def __str__(self):
+        return f'User/password combination incorrect or user does not exist'
+
+
+class BrainstemClient:
 
     def __init__(self,
-                 username: str = None,
-                 password: str = None,
-                 load_from_file: bool = False) -> None:
+                 token: str = None) -> None:
 
         # Server path
-        self.address = 'https://www.brainstem.org/rest/'  # Public server
+        self._address = 'https://www.brainstem.org/api/'
 
-        if load_from_file:
-            path = os.path.dirname(os.path.abspath(__file__))
-            with open(path+"/brainstem_credentials_encoded.json") as json_file:
-                self._token = json.load(json_file)["credentials"]
+        if token:
+            self._token = token
         else:
-            if not username:
-                username = input("Please enter your username:")
-            if not password:
-                password = getpass("Please enter your password:")
+            username = input("Please enter your username:")
+            password = getpass("Please enter your password:")
 
-            self._token = self.set_token_authentication(
-                url=self.address.replace("rest/", "api-token-auth/"),
+            self._token = self.__set_token_authentication(
+                url=self._address + "token/",
                 username=username,
                 password=password,
-                save_to_file=False,
-                return_token=True
             )
 
-    def set_token_authentication(self, url: str,
-                                 username: str,
-                                 password: str,
-                                 save_to_file: bool = True,
-                                 return_token: bool = False):
+            print("Your authorization token is:\n", self._token)
+            print("\nPlease keep it in a safe place.")
+
+    def __set_token_authentication(self,
+                                   url: str,
+                                   username: str,
+                                   password: str) -> str:
 
         headers = {
             "accept": "application/json",
@@ -86,22 +86,14 @@ class StemClient:
             "password": password
         }
         resp = requests.post(url, headers=headers, json=params)
-        token = json.loads(resp.text)['token']
 
         if resp.status_code != 200:
-            print('error: ' + str(resp.status_code))
-        else:
-            print('Success')
+            raise LoginError()
 
-        if save_to_file:
-            path = os.path.dirname(os.path.abspath(__file__))
-            with open(path+"/brainstem_credentials_encoded.json", 'w') as fp:
-                json.dump({'credentials': token}, fp)
+        token = json.loads(resp.text)['token']
+        return token
 
-        if return_token:
-            return token
-
-    def get_app_from_model(modelname):
+    def __get_app_from_model(self, modelname: str) -> str:
         app = None
 
         if modelname in ['project', 'subject', 'dataset', 'collection',
@@ -139,18 +131,27 @@ class StemClient:
 
     def load_model(self,
                    model: ModelType,
-                   portal: PortalType = "public",
+                   portal: PortalType = "private",
                    id: str = None,
+                   options: str = None,
                    filters: dict = None,
                    sort: list = None,
-                   include: list = None) -> dict:
+                   include: list = None) -> Response:
 
-        app = self.get_app_from_model(model)
+        app = self.__get_app_from_model(model)
+        if app is None:
+            resp = Response()
+            resp.status_code = 404
+            return resp
+
+        if options is None:
+            options = ""
 
         if id:
-            query_parameters = id
+            query_parameters = id + "/" + options
         else:
             query_parameters = ""
+
             if filters:
                 for key in filters.keys():
                     if query_parameters == "":
@@ -167,6 +168,7 @@ class StemClient:
                     else:
                         prefix = "&"
                     query_parameters += prefix + "sort[]=" + elem
+
             if include:
                 for elem in include:
                     if query_parameters == "":
@@ -175,11 +177,70 @@ class StemClient:
                         prefix = "&"
                     query_parameters += prefix + "include[]=" + elem + ".*"
 
-        request_url = (self.address + portal
+        request_url = (self._address + portal
                        + "/" + app + "/" + model
                        + "/" + query_parameters)
 
-        response = requests.get(request_url,
-                                headers={"Authorization": "Token %s"
-                                         % self._token})
-        return response.json()
+        resp = requests.get(request_url,
+                            headers={"Authorization": "Bearer %s"
+                                     % self._token})
+        return resp
+
+    def save_model(self,
+                   model: ModelType,
+                   portal: PortalType = "private",
+                   id: str = None,
+                   data: dict = None,
+                   options: str = None) -> Response:
+
+        app = self.__get_app_from_model(model)
+        if app is None:
+            resp = Response()
+            resp.status_code = 404
+            return resp
+
+        if data is None:
+            data = {}
+
+        if options is None:
+            options = ""
+
+        # Check if entry already exists
+        if id is not None:
+            # This is an update request
+            request_url = (self._address + portal + "/" + app + "/" + model
+                           + "/" + id + "/" + options)
+            resp = requests.patch(request_url, json=data,
+                                  headers={"Authorization": "Bearer %s"
+                                           % self._token})
+
+        else:
+            # This is a create request
+            request_url = (self._address + portal + "/" + app + "/"
+                           + model + "/" + options)
+            resp = requests.post(request_url, json=data,
+                                 headers={"Authorization": "Bearer %s"
+                                          % self._token})
+
+        return resp
+
+    def delete_model(self,
+                     model: ModelType,
+                     portal: PortalType = "private",
+                     id: str = None):
+
+        app = self.__get_app_from_model(model)
+        if app is None:
+            resp = Response()
+            resp.status_code = 404
+            return resp
+
+        # Check if entry already exists
+        if id is not None:
+            request_url = (self._address + portal + "/" + app + "/" + model
+                           + "/" + id + "/")
+            resp = requests.delete(request_url,
+                                   headers={"Authorization": "Bearer %s"
+                                            % self._token})
+
+            return resp
