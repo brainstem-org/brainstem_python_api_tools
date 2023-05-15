@@ -56,7 +56,6 @@ class BrainstemClient:
 
         # Server path
         self._address = 'https://www.brainstem.org/api/'
-        self._address = 'http://127.0.0.1:8000/api/'
 
         if token:
             self._token = token
