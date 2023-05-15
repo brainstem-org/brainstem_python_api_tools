@@ -67,7 +67,6 @@ class StemClient:
 				return_token=True
 			)
 
-	
 	def set_token_authentication(self, url: str, username: str, password: str, save_to_file: bool=True, return_token: bool=False):
 		headers = {
 			"accept": "application/json",
@@ -92,7 +91,6 @@ class StemClient:
 		
 		if return_token:
 			return token
-	
 
 	def get_app_from_model(self, modelname: str) -> str:
 		app = ""
@@ -113,7 +111,6 @@ class StemClient:
 		elif modelname in ['group']:
 			app = 'auth'
 		return app
-
 
 	def load_model(self, model: ModelType, portal: PortalType="public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> dict:
 		app = self.get_app_from_model(model)
@@ -145,7 +142,6 @@ class StemClient:
 		request_url = self.address + portal + "/" + app + "/" + model + "/" + query_parameters
 		response = requests.get(request_url, headers={"Authorization": "Token %s" % self._token})
 		return response.json()
-	
 
 	def load_datasets(self, portal: PortalType="public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> Union[Dict, List[Dict]]:
 		r = self.load_model("dataset", portal, id, filters, sort, include)
@@ -154,8 +150,7 @@ class StemClient:
 			return r["datasets"]
 		# if only one result, return the single dataset dictionary
 		return r["dataset"]
-	
-	
+
 	def load_projects(self, portal: PortalType="public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> Union[Dict, List[Dict]]:
 		r = self.load_model("project", portal, id, filters, sort, include)
 		# if multiple results, return the list of projects dictionaries
@@ -164,11 +159,9 @@ class StemClient:
 		# if only one result, return the single project dictionary
 		return r["project"]
 
-
 	def load_experiment_data(self, portal: PortalType="public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> Union[Dict, List[Dict]]:
 		r = self.load_model("experimentdata", portal, id, filters, sort, include)
 		return r["experiment_data"]
-	
 
 	def load_data_repository(self, portal: PortalType="public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> Union[Dict, List[Dict]]:
 		r = self.load_model("datarepository", portal, id, filters, sort, include)
@@ -178,22 +171,18 @@ class StemClient:
 		# if only one result, return the single data repository dictionary
 		return r["data_repository"]
 
+	def load_actions(self, portal: PortalType = "public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> Union[Dict, List[Dict]]:
+		actions = self.load_model(model="action", portal=portal, id=id, filters=filters, sort=sort, include=include)
+		# if multiple results, return the list of actions
+		if "actions" in actions:
+			return actions["actions"]
+		# if only one result, return the single action
+		return actions["action"]
 
-	def get_dataset_metadata(self, dataset_id: str) -> dict:
-		dataset_metadata = self.load_datasets(id=dataset_id)
-		# Update metadata with project information
-		project = self.load_projects(id=dataset_metadata["projects"][0])
-		project.pop("subjects")
-		project.pop("datasets")
-		dataset_metadata.pop("projects")
-		dataset_metadata["project"] = project
-		# Update metadata with experiment data information
-		experiment_data = self.load_experiment_data(id=dataset_metadata["experimentdata"][0])
-		experiment_data.pop("dataset")
-		dataset_metadata.pop("experimentdata")
-		dataset_metadata["experiment_data"] = experiment_data
-		# Update metadata with data repository information
-		data_repository = self.load_data_repository(id=dataset_metadata["datarepositories"][0])
-		dataset_metadata.pop("datarepositories")
-		dataset_metadata["data_repository"] = data_repository
-		return dataset_metadata
+	def load_subjects(self, portal: PortalType = "public", id: str=None, filters: dict=None, sort: list=None, include: list=None) -> Union[Dict, List[Dict]]:
+		subjects = self.load_model(model="subject", portal=portal, id=id, filters=filters, sort=sort, include=include)
+		# if multiple results, return the list of subjects
+		if "subjects" in subjects:
+			return subjects["subjects"]
+		# if only one result, return the single subject
+		return subjects["subject"]
