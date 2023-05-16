@@ -99,8 +99,4 @@ def get_nwbfile_metadata(dataset_metadata: Dict) -> Dict:
         experiment_description = BeautifulSoup(experiment_description_html, 'html.parser').get_text()
         metadata["NWBFile"].update(experiment_description=experiment_description)
 
-    if "groups" in dataset_metadata["project"]:
-        group_name = list(dataset_metadata["project"]["groups"].keys())[0]
-        metadata["NWBFile"].update(institution=group_name)
-
     return metadata
