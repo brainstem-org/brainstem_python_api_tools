@@ -15,6 +15,11 @@ def get_project_metadata(client: BrainstemClient, project_id: str, portal: str =
 
 def get_experiment_data(client: BrainstemClient, experiment_data_id: str, portal: str = "public") -> Dict:
     experiment_data = client.load_model(model="experimentdata", portal=portal, id=experiment_data_id).json()["experiment_data"]
+    hardware_device_id = experiment_data["hardware_device"]
+    hardware_device = client.load_model(model="hardwaredevice", portal=portal, id=hardware_device_id).json()["hardware_device"]
+    supplier = client.load_model(model="supplier", portal=portal, id=hardware_device["supplier"]).json()["supplier"]
+    hardware_device.update(supplier=supplier)
+    experiment_data.update(hardware_device=hardware_device)
     experiment_data.pop("dataset")
     return experiment_data
 
