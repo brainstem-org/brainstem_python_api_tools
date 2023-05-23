@@ -1,5 +1,7 @@
-from typing import Dict
+from collections import defaultdict
+from typing import Dict, Optional
 
+import yaml
 from bs4 import BeautifulSoup
 from dateutil.parser import parse
 from neuroconv.datainterfaces import interfaces_by_category
@@ -94,29 +96,70 @@ def get_dataset_metadata(client: BrainstemClient, dataset_id: str, portal: str =
     return dataset_metadata
 
 
-def get_nwbfile_metadata(dataset_metadata: Dict) -> Dict:
+def write_conversion_specification_yml(
+        yml_file_path: str,
+        dataset_metadata: Dict,
+        interface_kwargs: Optional[Dict] = None,
+        conversion_options: Optional[Dict] = None,
+):
     assert dataset_metadata["date_time"], "The 'date_time' field should contain the start time of the recording."
-    metadata = dict(
-        NWBFile=dict(
-            session_id=dataset_metadata["name"],
-            session_start_time=parse(dataset_metadata["date_time"]),
-            identifier=dataset_metadata["id"],
-        ),
-    )
 
-    if "subject" in dataset_metadata:
-        metadata.update(Subject=dict(
-            subject_id=dataset_metadata["subject"]["name"],
-            strain=dataset_metadata["subject"]["strain"]["name"],
-            sex=dataset_metadata["subject"]["sex"],
-            species=dataset_metadata["subject"]["species"]["description"],
-            date_of_birth=parse(dataset_metadata["subject"]["birth_date"]),
-        ),
-    )
-
+    conversion_spec = dict(metadata=dict(NWBFile=dict()))
     experiment_description_html = dataset_metadata["project"]["description"]
     if experiment_description_html:
-        experiment_description = BeautifulSoup(experiment_description_html, 'html.parser').get_text()
-        metadata["NWBFile"].update(experiment_description=experiment_description)
+        experiment_description = BeautifulSoup(experiment_description_html, "html.parser").get_text()
+        conversion_spec["metadata"]["NWBFile"].update(experiment_description=experiment_description)
 
-    return metadata
+    if conversion_options:
+        conversion_spec.update(dict(conversion_options=conversion_options))
+
+    experiment_data = dataset_metadata["experiment_data"]
+    source_data = dict(recording=dict())
+
+    if experiment_data["type"] == "Extracellular":
+        # note to remove special characters (e.g. re.sub(r'[^A-Za-z0-9\s]+', '', supplier))
+        supplier = experiment_data["supplier"]["name"].replace(" ", "")
+        interface_name = supplier_to_ecephys_interface.get(supplier)
+        if interface_name is not None:
+            conversion_spec.update(dict(data_interfaces=dict(recording=interface_name)))
+
+            if interface_kwargs:
+                # e.g. specifying the stream_name
+                source_data.update(recording=interface_kwargs)
+
+        conversion_spec.update(experiments=dict(ecephys=dict()))
+        session_metadata = dict(NWBFile=dict(session_description=experiment_data["description"]))
+
+        # limited for now to use only first path
+        path = dataset_metadata["data_repository"]["data_protocols_json"][0]["path"]
+        # TODO: interface specific folder path or file path
+        source_data["recording"].update(folder_path=path)  # relative folder path
+
+        sessions = [
+            dict(
+                nwbfile_name=f"{dataset_metadata['name']}.nwb",
+                source_data=source_data,
+                metadata=dict(
+                    NWBFile=dict(
+                        session_id=dataset_metadata["name"],
+                        session_start_time=parse(dataset_metadata["date_time"]).isoformat(),
+                        identifier=dataset_metadata["id"],
+                    ),
+                    Subject=dict(
+                        subject_id=dataset_metadata["subject"]["name"],
+                        strain=dataset_metadata["subject"]["strain"]["name"],
+                        sex=dataset_metadata["subject"]["sex"],
+                        species=dataset_metadata["subject"]["species"]["description"].capitalize(),
+                        date_of_birth=dataset_metadata["subject"]["birth_date"],
+                    ),
+                )
+            )
+        ]
+
+        conversion_spec["experiments"]["ecephys"].update(
+            metadata=session_metadata,
+            sessions=sessions,
+        )
+
+    with open(yml_file_path, 'w') as file:
+        yaml.dump(conversion_spec, file, default_flow_style=False)
