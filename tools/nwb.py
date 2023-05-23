@@ -18,7 +18,8 @@ def get_experiment_data(client: BrainstemClient, experiment_data_id: str, portal
     hardware_device_id = experiment_data["hardware_device"]
     hardware_device = client.load_model(model="hardwaredevice", portal=portal, id=hardware_device_id).json()["hardware_device"]
     supplier = client.load_model(model="supplier", portal=portal, id=hardware_device["supplier"]).json()["supplier"]
-    hardware_device.update(supplier=supplier)
+    experiment_data["supplier"] = supplier
+    hardware_device.pop("supplier")
     experiment_data.update(hardware_device=hardware_device)
     experiment_data.pop("dataset")
     return experiment_data
