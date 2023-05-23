@@ -11,7 +11,7 @@ from brainstem_api_client import BrainstemClient
 ecephys_interfaces = interfaces_by_category["ecephys"]
 supplier_to_ecephys_interface = defaultdict(None)
 supplier_to_ecephys_interface.update(
-        BlackrockMicrosystems=ecephys_interfaces.get("OpenEphys").__name__,
+        BlackrockMicrosystems=ecephys_interfaces.get("Blackrock").__name__,
         CEDCambridgeElectronicdesignlimited=ecephys_interfaces.get("CED").__name__,
         IMEC=ecephys_interfaces.get("SpikeGLX").__name__,
         IntanTechnologies=ecephys_interfaces.get("Intan").__name__,
