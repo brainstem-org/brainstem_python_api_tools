@@ -11,5 +11,6 @@ yml_file_path = "output.yaml"
 write_conversion_specification_yml(
     yml_file_path=yml_file_path,
     dataset_metadata=dataset_metadata,
+    interface_properties=dict(stream_name="Signals CH"),
     conversion_options=dict(stub_test=True),
 )
