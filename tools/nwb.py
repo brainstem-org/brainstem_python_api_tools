@@ -1,4 +1,3 @@
-from collections import defaultdict
 from typing import Dict, Optional
 
 import yaml
@@ -84,23 +83,6 @@ def get_dataset_metadata(client: BrainstemClient, dataset_id: str, portal: str =
     return dataset_metadata
 
 
-def get_ecephys_interface_from_supplier(supplier: str):
-    supplier_to_interface = defaultdict()
-    supplier_to_interface.update(
-        BlackrockMicrosystems="Blackrock",
-        CEDCambridgeElectronicdesignlimited="CED",
-        IMEC="SpikeGLX",
-        IntanTechnologies="Intan",
-        JaneliaResearchCampus="SpikeGLX",
-        Neuralynx="Neuralynx",
-        OpenEphys="OpenEphys",
-        PlexonInstruments="Plexon",  # sorting or recording?
-        ),
-    # note to remove special characters (e.g. re.sub(r'[^A-Za-z0-9\s]+', '', supplier))
-    supplier = supplier.replace(" ", "")
-    return supplier_to_interface.get(supplier)
-
-
 def write_conversion_specification_yml(
         yml_file_path: FilePathType,
         dataset_metadata: Dict,
@@ -138,7 +120,7 @@ def write_conversion_specification_yml(
                 source_data:
                     recording:
                         folder_path: openephys/OpenEphys_SampleData_1
-                        stream_name: Ch
+                        stream_name: Signals CH
     metadata:
         NWBFile:
             experiment_description: Project description
@@ -178,10 +160,19 @@ def write_conversion_specification_yml(
     # Add interface specific source data based on experiment_data
     source_data = dict(recording=dict())
     if experiment_data["type"] == "Extracellular":
-        supplier_name = experiment_data["supplier"]["name"]
-        interface_name = get_ecephys_interface_from_supplier(supplier=supplier_name)
         ecephys_interfaces = interfaces_by_category["ecephys"]
-        interface_cls = ecephys_interfaces.get(interface_name)
+        hardware_supplier_to_interface = {
+            "Blackrock Microsystems": ecephys_interfaces["Blackrock"],
+            "CED Cambridge Electronic design limited": ecephys_interfaces["CED"],
+            "IMEC": ecephys_interfaces["SpikeGLX"],
+            "Intan Technologies": ecephys_interfaces["Intan"],
+            "Janelia Research Campus": ecephys_interfaces["SpikeGLX"],
+            "Neuralynx": ecephys_interfaces["Neuralynx"],
+            "Open Ephys": ecephys_interfaces["OpenEphys"],
+            "Plexon Instruments": ecephys_interfaces["Plexon"],
+        }
+        supplier_name = experiment_data["supplier"]["name"]
+        interface_cls = hardware_supplier_to_interface[supplier_name]
         assert interface_cls, f"Could not find a matching interface for {supplier_name} supplier."
         conversion_spec["data_interfaces"].update(recording=interface_cls.__name__)
 
