@@ -11,15 +11,15 @@ class ModelType(Enum):
     subject = "subject"
     dataset = "dataset"
     collection = "collection"
-    action = "action"
+    cohort = "cohort"
+    procedure = "procedure"
     behavior = "behavior"
     experimentdata = "experimentdata"
     manipulation = "manipulation"
-    subjectstatechange = "subjectstatechange"
     actionlog = "actionlog"
     subjectlog = "subjectlog"
     behavioralparadigm = "behavioralparadigm"
-    datarepository = "datarepository"
+    datastorage = "datastorage"
     physicalenvironment = "physicalenvironment"
     consumable = "consumable"
     hardwaredevice = "hardwaredevice"
@@ -96,17 +96,17 @@ class BrainstemClient:
     def __get_app_from_model(self, modelname: str) -> str:
         app = None
 
-        if modelname in ['project', 'subject', 'dataset', 'collection',
+        if modelname in ['project', 'subject', 'dataset', 'collection', 'cohort',
                          'projectmembershipinvitation',
                          'projectgroupmembershipinvitation']:
             app = 'stem'
 
         elif modelname in ['action', 'behavior', 'experimentdata',
-                           'manipulation', 'subjectstatechange', 'actionlog',
+                           'procedure', 'actionlog',
                            'subjectlog']:
             app = 'modules'
 
-        elif modelname in ['behavioralparadigm', 'datarepository',
+        elif modelname in ['behavioralparadigm', 'datastorage',
                            'physicalenvironment']:
             app = 'personal_attributes'
 

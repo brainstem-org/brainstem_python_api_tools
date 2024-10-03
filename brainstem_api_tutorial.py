@@ -42,7 +42,6 @@ experiment_data = output1["datasets"][0]["experimentdata"]
 output1 = client.load_model('dataset', filters={'name.icontains': 'Rat'}, sort=["-name"], include=['projects']).json()
 
 
-
 # 2. Updating a dataset
 
 ## We can make changes to a model and update it in the database.
@@ -51,8 +50,6 @@ output1 = client.load_model('dataset', filters={'name.icontains': 'Rat'}, sort=[
 dataset = {}
 dataset["description"] = 'new description'
 output2 = client.save_model("dataset", id="0e39c1fd-f413-4142-95f7-f50185e81fa4", data=dataset).json()
-
-
 
 
 # 3. Creating a new dataset
@@ -68,10 +65,7 @@ dataset["description"] = 'description'
 output3 = client.save_model("dataset", data=dataset).json()
 
 
-
-
 # 4. Load public projects
 
 ## Request the public data by defining the portal to be public
 output4 = client.load_model("project", portal="public").json()
-
