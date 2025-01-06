@@ -9,24 +9,26 @@ from enum import Enum
 class ModelType(Enum):
     project = "project"
     subject = "subject"
-    dataset = "dataset"
+    session = "session"
     collection = "collection"
     cohort = "cohort"
     procedure = "procedure"
     behavior = "behavior"
-    experimentdata = "experimentdata"
+    dataacquisition = "dataacquisition"
     manipulation = "manipulation"
-    actionlog = "actionlog"
+    equipment = "equipment"
+    consumablestock = "consumablestock"
+    procedurelog = "procedurelog"
     subjectlog = "subjectlog"
     behavioralparadigm = "behavioralparadigm"
     datastorage = "datastorage"
-    physicalenvironment = "physicalenvironment"
+    inventory = "inventory"
+    setup = "setup"
     consumable = "consumable"
     hardwaredevice = "hardwaredevice"
     supplier = "supplier"
     brainregion = "brainregion"
-    environmenttype = "environmenttype"
-    sensorystimulustype = "sensorystimulustype"
+    setuptype = "setuptype"
     species = "species"
     strain = "strain"
     strainapproval = "strainapproval"
@@ -96,18 +98,17 @@ class BrainstemClient:
     def __get_app_from_model(self, modelname: str) -> str:
         app = None
 
-        if modelname in ['project', 'subject', 'dataset', 'collection', 'cohort',
+        if modelname in ['project', 'subject', 'session', 'collection', 'cohort',
                          'projectmembershipinvitation',
                          'projectgroupmembershipinvitation']:
             app = 'stem'
 
-        elif modelname in ['action', 'behavior', 'experimentdata',
-                           'procedure', 'actionlog',
-                           'subjectlog']:
+        elif modelname in ['procedure', 'behavior', 'dataacquisition', 'manipulation', 
+                           'equipment', 'consumablestock', 'procedurelog', 'subjectlog']:
             app = 'modules'
 
-        elif modelname in ['behavioralparadigm', 'datastorage',
-                           'physicalenvironment']:
+        elif modelname in ['behavioralparadigm', 'datastorage', 'inventory',
+                           'setup']:
             app = 'personal_attributes'
 
         elif any([x in modelname for x in
@@ -115,7 +116,7 @@ class BrainstemClient:
             app = 'resources'
 
         elif any([x in modelname for x in
-                 ['brainregion', 'environmenttype', 'sensorystimulustype',
+                 ['brainregion', 'setuptype',
                   'species', 'strain']]):
             app = 'taxonomies'
 
