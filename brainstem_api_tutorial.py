@@ -1,5 +1,4 @@
-from brainstem_api_client import BrainstemClient
-
+from brainstem_api_tools import BrainstemClient
 
 # 0. Load the client. User email and password will be requested.
 client = BrainstemClient()
