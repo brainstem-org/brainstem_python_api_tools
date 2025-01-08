@@ -4,7 +4,7 @@ from brainstem_api_tools import BrainstemClient
 client = BrainstemClient()
 
 
-# 1. Loading sessions.
+# Loading sessions.
 
 ## load_model can be used to load any model:
 ## We just need to pass our settings and the name of the model.
@@ -41,7 +41,7 @@ dataacquisition = output1["sessions"][0]["dataacquisition"]
 output1 = client.load_model('session', filters={'name.icontains': 'Rat'}, sort=["-name"], include=['projects']).json()
 
 
-# 2. Updating a session
+# Updating a session
 
 ## We can make changes to a model and update it in the database.
 ## In this case, we changed the description of one of the
@@ -51,7 +51,7 @@ session["description"] = 'new description'
 output2 = client.save_model("session", id="0e39c1fd-f413-4142-95f7-f50185e81fa4", data=session).json()
 
 
-# 3. Creating a new session
+# Creating a new session
 
 ## We can submit a new entry by defining a dictionary with the
 ## required fields.
@@ -64,7 +64,7 @@ session["description"] = 'description'
 output3 = client.save_model("session", data=session).json()
 
 
-# 4. Load public projects
+# Load public projects
 
 ## Request the public data by defining the portal to be public
 output4 = client.load_model("project", portal="public").json()
