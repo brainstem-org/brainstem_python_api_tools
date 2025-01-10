@@ -31,7 +31,7 @@ print(response.json())
 ```
 
 ## Contributing
-Contributions are welcome! Feel free to open issues or submit pull requests on [GitHub](https://github.com/brainstem-org/brainstem_python_api_tools).
+Contributions are welcome! Feel free to open issues or submit pull requests on GitHub.
 
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
