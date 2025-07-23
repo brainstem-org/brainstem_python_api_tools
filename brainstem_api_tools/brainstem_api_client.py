@@ -62,7 +62,7 @@ class BrainstemClient:
         if token:
             self._token = token
         else:
-            username = input("Please enter your username:")
+            username = input("Please enter your username/email:")
             password = getpass("Please enter your password:")
 
             self._token = self.__set_token_authentication(
