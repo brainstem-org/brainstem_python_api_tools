@@ -20,7 +20,7 @@ output1 = client.load_model('session', filters={'name': 'yeah'}).json()
 
 ## Loaded models can be sorted by different criteria applying to
 ## their fields. In this example, sessions will be sorted in 
-## descending ording according to their name.
+## descending ordering according to their name.
 output1 = client.load_model('session', sort=['-name']).json()
 
 ## In some cases models contain relations with other models, and
@@ -29,7 +29,7 @@ output1 = client.load_model('session', sort=['-name']).json()
 ## manipulations related to each session will be included. 
 output1 = client.load_model('session', include=['projects', 'dataacquisition', 'behaviors', 'manipulations']).json()
 
-### The list of related experiment data can be retrived from the
+### The list of related experiment data can be retrieved from the
 ### returned dictionary.
 dataacquisition = output1["sessions"][0]["dataacquisition"]
 
