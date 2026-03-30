@@ -4,9 +4,12 @@ import time
 import webbrowser
 from enum import Enum
 from pathlib import Path
+from typing import Union
 
 import requests
+from requests.adapters import HTTPAdapter
 from requests.models import Response
+from urllib3.util.retry import Retry
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +122,7 @@ class AuthenticationError(Exception):
 class BrainstemClient:
 
     BASE_URL = "https://www.brainstem.org/"
+    DEFAULT_TIMEOUT: int = 30  # seconds; applied to all HTTP calls
 
     def __init__(
         self,
@@ -129,6 +133,11 @@ class BrainstemClient:
         base = (url.rstrip("/") + "/") if url else self.BASE_URL
         self._address = base + "api/"
         self._session = requests.Session()
+
+        # Automatically retry transient server errors
+        _retry = Retry(total=3, backoff_factor=0.5, status_forcelist={502, 503, 504})
+        self._session.mount("https://", HTTPAdapter(max_retries=_retry))
+        self._session.mount("http://", HTTPAdapter(max_retries=_retry))
 
         if token:
             self._token = token
@@ -156,7 +165,7 @@ class BrainstemClient:
         _TOKEN_FILE.write_text(token)
         _TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
 
-    def _device_auth_flow(self, headless: bool = False) -> str:
+    def _device_auth_flow(self, headless: bool = False, max_wait: int = 900) -> str:
         """Run the BrainSTEM device authorization flow and return a token.
 
         The user authenticates in their browser (supports 2FA). No
@@ -166,6 +175,7 @@ class BrainstemClient:
         ----------
         headless : If ``True``, print the verification URI and user code
                    instead of opening a browser window.
+        max_wait : Maximum seconds to wait for browser approval (default: 900).
         """
         # Step 1 — initiate a device session
         resp = requests.post(
@@ -186,8 +196,13 @@ class BrainstemClient:
             webbrowser.open(data["verification_uri_complete"])
             print("Waiting for browser approval...")
 
-        # Step 3 — poll until resolved
+        # Step 3 — poll until resolved (timeout after max_wait seconds)
+        deadline = time.monotonic() + max_wait
         while True:
+            if time.monotonic() > deadline:
+                raise AuthenticationError(
+                    f"Device authorization timed out after {max_wait} seconds."
+                )
             time.sleep(interval)
             poll = requests.post(
                 self._address + "auth/device/token/",
@@ -233,7 +248,7 @@ class BrainstemClient:
              include: list = None,
              limit: int = None,
              offset: int = None,
-             load_all: bool = False):
+             load_all: bool = False) -> Union[Response, dict]:
         """Load one or more records of *model*.
 
         Parameters
@@ -271,7 +286,7 @@ class BrainstemClient:
                 params["offset"] = offset
 
         if not load_all:
-            return self._session.get(url, params=params)
+            return self._session.get(url, params=params, timeout=self.DEFAULT_TIMEOUT)
 
         # --- auto-paginate and merge all pages ---
         page_size = limit or 100
@@ -282,7 +297,11 @@ class BrainstemClient:
         records_key: str = None
 
         while True:
-            resp = self._session.get(url, params=params)
+            resp = self._session.get(url, params=params, timeout=self.DEFAULT_TIMEOUT)
+            if resp.status_code == 401:
+                raise AuthenticationError(
+                    "API token is invalid or expired. Run `brainstem login` to re-authenticate."
+                )
             resp.raise_for_status()
             data = resp.json()
 
@@ -330,10 +349,10 @@ class BrainstemClient:
 
         if id is not None:
             url = self._build_url(portal, app, model, id, options)
-            return self._session.patch(url, json=data)
+            return self._session.patch(url, json=data, timeout=self.DEFAULT_TIMEOUT)
         else:
             url = self._build_url(portal, app, model, options=options)
-            return self._session.post(url, json=data)
+            return self._session.post(url, json=data, timeout=self.DEFAULT_TIMEOUT)
 
     def delete(self,
                model,
@@ -353,7 +372,13 @@ class BrainstemClient:
         portal = _resolve_portal(portal)
         app = _MODEL_TO_APP[model]
         url = self._build_url(portal, app, model, id)
-        return self._session.delete(url)
+        return self._session.delete(url, timeout=self.DEFAULT_TIMEOUT)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._session.close()
 
     # ------------------------------------------------------------------
     # Convenience loaders  (mirror the MATLAB load_* helpers)
@@ -363,6 +388,11 @@ class BrainstemClient:
                           portal, id, filters, sort, include, limit, offset,
                           load_all, **field_kwargs):
         """Shared implementation for all convenience loaders."""
+        unknown = set(field_kwargs) - set(filter_map)
+        if unknown:
+            raise TypeError(
+                f"Unexpected keyword argument(s): {', '.join(sorted(unknown))}"
+            )
         merged_filters = dict(filters or {})
         for kwarg, api_field in filter_map.items():
             value = field_kwargs.get(kwarg)
@@ -385,7 +415,7 @@ class BrainstemClient:
                      subjects: str = None, tags: str = None,
                      filters: dict = None, sort: list = None,
                      include: list = None, limit: int = None,
-                     offset: int = 0, load_all: bool = False):
+                     offset: int = None, load_all: bool = False):
         """Load project(s). Embeds sessions, subjects, collections and cohorts by default.
 
         Parameters
@@ -410,7 +440,7 @@ class BrainstemClient:
                      strain: str = None, sex: str = None, tags: str = None,
                      filters: dict = None, sort: list = None,
                      include: list = None, limit: int = None,
-                     offset: int = 0, load_all: bool = False):
+                     offset: int = None, load_all: bool = False):
         """Load subject(s). Embeds procedures and subjectlogs by default.
 
         Parameters
@@ -436,7 +466,7 @@ class BrainstemClient:
                      datastorage: str = None, tags: str = None,
                      filters: dict = None, sort: list = None,
                      include: list = None, limit: int = None,
-                     offset: int = 0, load_all: bool = False):
+                     offset: int = None, load_all: bool = False):
         """Load session(s). Embeds dataacquisition, behaviors, manipulations and epochs by default.
 
         Parameters
@@ -460,7 +490,7 @@ class BrainstemClient:
                         name: str = None, tags: str = None,
                         filters: dict = None, sort: list = None,
                         include: list = None, limit: int = None,
-                        offset: int = 0, load_all: bool = False):
+                        offset: int = None, load_all: bool = False):
         """Load collection(s). Embeds sessions by default.
 
         Parameters
@@ -481,7 +511,7 @@ class BrainstemClient:
                     name: str = None, tags: str = None,
                     filters: dict = None, sort: list = None,
                     include: list = None, limit: int = None,
-                    offset: int = 0, load_all: bool = False):
+                    offset: int = None, load_all: bool = False):
         """Load cohort(s). Embeds subjects by default.
 
         Parameters
@@ -502,7 +532,7 @@ class BrainstemClient:
                       session: str = None, tags: str = None,
                       filters: dict = None, sort: list = None,
                       include: list = None, limit: int = None,
-                      offset: int = 0, load_all: bool = False):
+                      offset: int = None, load_all: bool = False):
         """Load behavior record(s).
 
         Parameters
@@ -523,7 +553,7 @@ class BrainstemClient:
                              session: str = None, tags: str = None,
                              filters: dict = None, sort: list = None,
                              include: list = None, limit: int = None,
-                             offset: int = 0, load_all: bool = False):
+                             offset: int = None, load_all: bool = False):
         """Load data acquisition record(s).
 
         Parameters
@@ -544,7 +574,7 @@ class BrainstemClient:
                           session: str = None, tags: str = None,
                           filters: dict = None, sort: list = None,
                           include: list = None, limit: int = None,
-                          offset: int = 0, load_all: bool = False):
+                          offset: int = None, load_all: bool = False):
         """Load manipulation record(s).
 
         Parameters
@@ -565,7 +595,7 @@ class BrainstemClient:
                        subject: str = None, tags: str = None,
                        filters: dict = None, sort: list = None,
                        include: list = None, limit: int = None,
-                       offset: int = 0, load_all: bool = False):
+                       offset: int = None, load_all: bool = False):
         """Load procedure record(s).
 
         Parameters
@@ -580,4 +610,278 @@ class BrainstemClient:
             portal=portal, id=id, filters=filters, sort=sort, include=include,
             limit=limit, offset=offset, load_all=load_all,
             subject=subject, tags=tags,
+        )
+
+    def load_procedurelog(self, portal="private", id: str = None,
+                          procedure: str = None, tags: str = None,
+                          filters: dict = None, sort: list = None,
+                          include: list = None, limit: int = None,
+                          offset: int = None, load_all: bool = False):
+        """Load procedure log record(s).
+
+        Parameters
+        ----------
+        procedure : Filter by procedure UUID.
+        tags      : Filter by tag.
+        """
+        return self._convenience_load(
+            "procedurelog",
+            default_include=[],
+            filter_map={"procedure": "procedure.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            procedure=procedure, tags=tags,
+        )
+
+    def load_subjectlog(self, portal="private", id: str = None,
+                        subject: str = None, tags: str = None,
+                        filters: dict = None, sort: list = None,
+                        include: list = None, limit: int = None,
+                        offset: int = None, load_all: bool = False):
+        """Load subject log record(s).
+
+        Parameters
+        ----------
+        subject : Filter by subject UUID.
+        tags    : Filter by tag.
+        """
+        return self._convenience_load(
+            "subjectlog",
+            default_include=[],
+            filter_map={"subject": "subject.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            subject=subject, tags=tags,
+        )
+
+    def load_equipment(self, portal="private", id: str = None,
+                       name: str = None, setup: str = None, tags: str = None,
+                       filters: dict = None, sort: list = None,
+                       include: list = None, limit: int = None,
+                       offset: int = None, load_all: bool = False):
+        """Load equipment record(s).
+
+        Parameters
+        ----------
+        name  : Filter by equipment name (case-insensitive contains).
+        setup : Filter by setup UUID.
+        tags  : Filter by tag.
+        """
+        return self._convenience_load(
+            "equipment",
+            default_include=[],
+            filter_map={"name": "name.icontains", "setup": "setup.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, setup=setup, tags=tags,
+        )
+
+    def load_consumablestock(self, portal="private", id: str = None,
+                             tags: str = None,
+                             filters: dict = None, sort: list = None,
+                             include: list = None, limit: int = None,
+                             offset: int = None, load_all: bool = False):
+        """Load consumable stock record(s).
+
+        Parameters
+        ----------
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "consumablestock",
+            default_include=[],
+            filter_map={"tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            tags=tags,
+        )
+
+    def load_behavioralassay(self, portal="private", id: str = None,
+                             name: str = None, tags: str = None,
+                             filters: dict = None, sort: list = None,
+                             include: list = None, limit: int = None,
+                             offset: int = None, load_all: bool = False):
+        """Load behavioral assay record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "behavioralassay",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_datastorage(self, portal="private", id: str = None,
+                         name: str = None, tags: str = None,
+                         filters: dict = None, sort: list = None,
+                         include: list = None, limit: int = None,
+                         offset: int = None, load_all: bool = False):
+        """Load data storage record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "datastorage",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_setup(self, portal="private", id: str = None,
+                   name: str = None, tags: str = None,
+                   filters: dict = None, sort: list = None,
+                   include: list = None, limit: int = None,
+                   offset: int = None, load_all: bool = False):
+        """Load setup record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "setup",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_hardwaredevice(self, portal="private", id: str = None,
+                            name: str = None, tags: str = None,
+                            filters: dict = None, sort: list = None,
+                            include: list = None, limit: int = None,
+                            offset: int = None, load_all: bool = False):
+        """Load hardware device record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "hardwaredevice",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_brainregion(self, portal="private", id: str = None,
+                         name: str = None, tags: str = None,
+                         filters: dict = None, sort: list = None,
+                         include: list = None, limit: int = None,
+                         offset: int = None, load_all: bool = False):
+        """Load brain region record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "brainregion",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_species(self, portal="private", id: str = None,
+                     name: str = None, tags: str = None,
+                     filters: dict = None, sort: list = None,
+                     include: list = None, limit: int = None,
+                     offset: int = None, load_all: bool = False):
+        """Load species record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "species",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_strain(self, portal="private", id: str = None,
+                    name: str = None, species: str = None, tags: str = None,
+                    filters: dict = None, sort: list = None,
+                    include: list = None, limit: int = None,
+                    offset: int = None, load_all: bool = False):
+        """Load strain record(s).
+
+        Parameters
+        ----------
+        name    : Filter by name (case-insensitive contains).
+        species : Filter by species UUID.
+        tags    : Filter by tag.
+        """
+        return self._convenience_load(
+            "strain",
+            default_include=[],
+            filter_map={"name": "name.icontains", "species": "species.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, species=species, tags=tags,
+        )
+
+    def load_publication(self, portal="private", id: str = None,
+                         name: str = None, tags: str = None,
+                         filters: dict = None, sort: list = None,
+                         include: list = None, limit: int = None,
+                         offset: int = None, load_all: bool = False):
+        """Load publication record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "publication",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_laboratory(self, portal="private", id: str = None,
+                        name: str = None, tags: str = None,
+                        filters: dict = None, sort: list = None,
+                        include: list = None, limit: int = None,
+                        offset: int = None, load_all: bool = False):
+        """Load laboratory record(s).
+
+        Parameters
+        ----------
+        name : Filter by name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "laboratory",
+            default_include=[],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
         )

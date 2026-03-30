@@ -450,3 +450,279 @@ class TestCLILogout:
             cli_module.main()
 
         assert "No cached token found" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Timeouts
+# ---------------------------------------------------------------------------
+
+class TestTimeouts:
+    def setup_method(self):
+        self.client = make_client()
+
+    def test_load_passes_timeout(self):
+        self.client._session.get = MagicMock(return_value=mock_response(200, {}))
+        self.client.load("session")
+        _, kwargs = self.client._session.get.call_args
+        assert kwargs.get("timeout") == BrainstemClient.DEFAULT_TIMEOUT
+
+    def test_save_post_passes_timeout(self):
+        self.client._session.post = MagicMock(return_value=mock_response(201))
+        self.client.save("session", data={"name": "x"})
+        _, kwargs = self.client._session.post.call_args
+        assert kwargs.get("timeout") == BrainstemClient.DEFAULT_TIMEOUT
+
+    def test_save_patch_passes_timeout(self):
+        uid = "00000000-0000-0000-0000-000000000010"
+        self.client._session.patch = MagicMock(return_value=mock_response(200))
+        self.client.save("session", id=uid, data={"description": "x"})
+        _, kwargs = self.client._session.patch.call_args
+        assert kwargs.get("timeout") == BrainstemClient.DEFAULT_TIMEOUT
+
+    def test_delete_passes_timeout(self):
+        uid = "00000000-0000-0000-0000-000000000011"
+        self.client._session.delete = MagicMock(return_value=mock_response(204))
+        self.client.delete("session", id=uid)
+        _, kwargs = self.client._session.delete.call_args
+        assert kwargs.get("timeout") == BrainstemClient.DEFAULT_TIMEOUT
+
+    def test_load_all_passes_timeout(self):
+        r = MagicMock()
+        r.raise_for_status = MagicMock()
+        r.status_code = 200
+        r.json.return_value = {"sessions": [{"id": "1"}], "count": 1}
+        self.client._session.get = MagicMock(return_value=r)
+        self.client.load("session", load_all=True)
+        _, kwargs = self.client._session.get.call_args
+        assert kwargs.get("timeout") == BrainstemClient.DEFAULT_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# 401 → AuthenticationError in load_all path
+# ---------------------------------------------------------------------------
+
+class TestLoadAll401:
+    def test_401_raises_authentication_error(self):
+        client = make_client()
+        r = MagicMock()
+        r.status_code = 401
+        r.raise_for_status = MagicMock()
+        client._session.get = MagicMock(return_value=r)
+        with pytest.raises(AuthenticationError, match="brainstem login"):
+            client.load("session", load_all=True)
+
+
+# ---------------------------------------------------------------------------
+# Device auth polling timeout
+# ---------------------------------------------------------------------------
+
+class TestDeviceAuthTimeout:
+    def test_polling_timeout_raises(self):
+        client = make_client()
+
+        device_resp = MagicMock()
+        device_resp.raise_for_status = MagicMock()
+        device_resp.json.return_value = {
+            "device_code": "dev123",
+            "user_code": "ABC-DEF",
+            "verification_uri": "https://brainstem.org/activate",
+            "verification_uri_complete": "https://brainstem.org/activate?code=ABC-DEF",
+            "interval": 0,
+        }
+        pending_resp = MagicMock()
+        pending_resp.raise_for_status = MagicMock()
+        pending_resp.json.return_value = {"status": "authorization_pending"}
+
+        # max_wait=0 triggers immediate timeout on the first iteration check
+        with patch("requests.post", side_effect=[device_resp] + [pending_resp] * 10), \
+             patch("webbrowser.open"), \
+             patch("time.monotonic", side_effect=[0, 0, 999]):
+            with pytest.raises(AuthenticationError, match="timed out"):
+                client._device_auth_flow(max_wait=0)
+
+
+# ---------------------------------------------------------------------------
+# Context manager
+# ---------------------------------------------------------------------------
+
+class TestContextManager:
+    def test_enter_returns_client(self):
+        client = make_client()
+        with client as c:
+            assert c is client
+
+    def test_exit_closes_session(self):
+        client = make_client()
+        client._session.close = MagicMock()
+        with client:
+            pass
+        client._session.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Unknown kwarg validation in convenience loaders
+# ---------------------------------------------------------------------------
+
+class TestUnknownKwarg:
+    def test_unknown_kwarg_raises(self):
+        client = make_client()
+        with pytest.raises(TypeError, match="Unexpected keyword argument"):
+            # Call _convenience_load directly with a kwarg not in filter_map
+            client._convenience_load(
+                "session",
+                default_include=[],
+                filter_map={"name": "name.icontains"},
+                portal="private", id=None, filters=None, sort=None,
+                include=None, limit=None, offset=None, load_all=False,
+                name="test",
+                oops="extra",  # not listed in filter_map
+            )
+
+
+# ---------------------------------------------------------------------------
+# New convenience loaders
+# ---------------------------------------------------------------------------
+
+class TestNewConvenienceLoaders:
+    def setup_method(self):
+        self.client = make_client()
+        self.client._session.get = MagicMock(return_value=mock_response(200, {}))
+
+    def _get_params(self):
+        return self.client._session.get.call_args[1].get("params", {})
+
+    def _get_url(self):
+        return self.client._session.get.call_args[0][0]
+
+    def test_load_procedurelog_procedure_filter(self):
+        uuid = "11111111-0000-0000-0000-000000000000"
+        self.client.load_procedurelog(procedure=uuid)
+        assert self._get_params()["filter{procedure.id}"] == uuid
+        assert "/modules/procedurelog/" in self._get_url()
+
+    def test_load_subjectlog_subject_filter(self):
+        uuid = "22222222-0000-0000-0000-000000000000"
+        self.client.load_subjectlog(subject=uuid)
+        assert self._get_params()["filter{subject.id}"] == uuid
+        assert "/modules/subjectlog/" in self._get_url()
+
+    def test_load_equipment_setup_filter(self):
+        uuid = "33333333-0000-0000-0000-000000000000"
+        self.client.load_equipment(setup=uuid)
+        assert self._get_params()["filter{setup.id}"] == uuid
+        assert "/modules/equipment/" in self._get_url()
+
+    def test_load_equipment_name_filter(self):
+        self.client.load_equipment(name="headstage")
+        assert self._get_params()["filter{name.icontains}"] == "headstage"
+
+    def test_load_consumablestock_url(self):
+        self.client.load_consumablestock()
+        assert "/modules/consumablestock/" in self._get_url()
+
+    def test_load_behavioralassay_name_filter(self):
+        self.client.load_behavioralassay(name="open field")
+        assert self._get_params()["filter{name.icontains}"] == "open field"
+        assert "/personal_attributes/behavioralassay/" in self._get_url()
+
+    def test_load_datastorage_url(self):
+        self.client.load_datastorage()
+        assert "/personal_attributes/datastorage/" in self._get_url()
+
+    def test_load_setup_url(self):
+        self.client.load_setup()
+        assert "/personal_attributes/setup/" in self._get_url()
+
+    def test_load_hardwaredevice_url(self):
+        self.client.load_hardwaredevice()
+        assert "/resources/hardwaredevice/" in self._get_url()
+
+    def test_load_brainregion_name_filter(self):
+        self.client.load_brainregion(name="CA1")
+        assert self._get_params()["filter{name.icontains}"] == "CA1"
+        assert "/taxonomies/brainregion/" in self._get_url()
+
+    def test_load_species_url(self):
+        self.client.load_species()
+        assert "/taxonomies/species/" in self._get_url()
+
+    def test_load_strain_species_filter(self):
+        uuid = "44444444-0000-0000-0000-000000000000"
+        self.client.load_strain(species=uuid)
+        assert self._get_params()["filter{species.id}"] == uuid
+        assert "/taxonomies/strain/" in self._get_url()
+
+    def test_load_publication_url(self):
+        self.client.load_publication()
+        assert "/dissemination/publication/" in self._get_url()
+
+    def test_load_laboratory_name_filter(self):
+        self.client.load_laboratory(name="Petersen")
+        assert self._get_params()["filter{name.icontains}"] == "Petersen"
+        assert "/users/laboratory/" in self._get_url()
+
+
+# ---------------------------------------------------------------------------
+# CLI — load / save / delete commands
+# ---------------------------------------------------------------------------
+
+class TestCLICommands:
+    def _run_cli(self, argv, client_mock):
+        import brainstem_api_tools.cli as cli_module
+        with patch("brainstem_api_tools.cli.BrainstemClient", return_value=client_mock), \
+             patch("sys.argv", argv):
+            cli_module.main()
+
+    def test_cli_load_calls_load(self, capsys):
+        resp = mock_response(200, {"sessions": []})
+        client = MagicMock()
+        client.load.return_value = resp
+        self._run_cli(["brainstem", "--token", TOKEN, "load", "session"], client)
+        client.load.assert_called_once()
+
+    def test_cli_load_filter_parsed(self, capsys):
+        resp = mock_response(200, {})
+        client = MagicMock()
+        client.load.return_value = resp
+        self._run_cli(
+            ["brainstem", "--token", TOKEN, "load", "session",
+             "--filters", "name.icontains=rat"],
+            client,
+        )
+        _, kwargs = client.load.call_args
+        assert kwargs["filters"] == {"name.icontains": "rat"}
+
+    def test_cli_save_post(self, capsys):
+        resp = mock_response(201, {"session": {"id": "abc"}})
+        client = MagicMock()
+        client.save.return_value = resp
+        self._run_cli(
+            ["brainstem", "--token", TOKEN, "save", "session",
+             "--data", '{"name": "x", "projects": []}'],
+            client,
+        )
+        client.save.assert_called_once()
+        _, kwargs = client.save.call_args
+        assert kwargs["data"] == {"name": "x", "projects": []}
+
+    def test_cli_delete(self, capsys):
+        resp = mock_response(204)
+        client = MagicMock()
+        client.delete.return_value = resp
+        self._run_cli(
+            ["brainstem", "--token", TOKEN, "delete", "session",
+             "--id", "00000000-0000-0000-0000-000000000099"],
+            client,
+        )
+        client.delete.assert_called_once()
+        _, kwargs = client.delete.call_args
+        assert kwargs["id"] == "00000000-0000-0000-0000-000000000099"
+
+    def test_cli_invalid_filter_exits(self):
+        import brainstem_api_tools.cli as cli_module
+        with patch("brainstem_api_tools.cli.BrainstemClient", return_value=MagicMock()), \
+             patch("sys.argv", ["brainstem", "--token", TOKEN, "load", "session",
+                                "--filters", "badfilter"]):
+            with pytest.raises(SystemExit):
+                cli_module.main()
+

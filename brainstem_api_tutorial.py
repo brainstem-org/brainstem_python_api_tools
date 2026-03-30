@@ -20,8 +20,7 @@ output1 = client.load('session').json()
 session = output1["sessions"][0]
 
 ## We can also filter the models by providing a dictionary where
-## the keys are the fields and the values the possible contents.
-## In this example, it will just load sessions whose name is "yeah".
+## In this example, it will just load sessions whose name exactly equals "yeah".
 output1 = client.load('session', filters={'name': 'yeah'}).json()
 
 ## Loaded models can be sorted by different criteria applying to
@@ -67,7 +66,7 @@ output_sessions = client.load_session(name='Rat', load_all=True)
 
 ## load_subject includes procedures and subjectlogs.
 ## Filter by sex ('M' / 'F') and/or project UUID:
-project_uuid = 'e7475834-7733-48cf-9e3b-f4f2d2d0305a'
+project_uuid = '<YOUR_PROJECT_UUID>'  # replace with a real project UUID
 output_subjects = client.load_subject(sex='M', projects=project_uuid, load_all=True)
 
 ## load_project includes sessions, subjects, collections and cohorts.
@@ -81,13 +80,13 @@ output_cohort = client.load_cohort(name='MyCohort')
 
 ## load_behavior / load_dataacquisition / load_manipulation all
 ## accept session=<uuid> to scope results to a single session.
-session_uuid = '0e39c1fd-f413-4142-95f7-f50185e81fa4'
+session_uuid = '<YOUR_SESSION_UUID>'  # replace with a real session UUID
 output_behaviors        = client.load_behavior(session=session_uuid, load_all=True)
 output_dataacquisition  = client.load_dataacquisition(session=session_uuid, load_all=True)
 output_manipulations    = client.load_manipulation(session=session_uuid, load_all=True)
 
 ## load_procedure scopes by subject UUID.
-subject_uuid = 'bfb0e3e2-2c48-4b72-9034-1ef50c5c432a'
+subject_uuid = '<YOUR_SUBJECT_UUID>'  # replace with a real subject UUID
 output_procedures = client.load_procedure(subject=subject_uuid, load_all=True)
 
 ## Any convenience loader also accepts extra filters= and custom
@@ -107,7 +106,7 @@ output_sessions = client.load_session(
 ## previously loaded sessions.
 session = {}
 session["description"] = 'new description'
-output2 = client.save("session", id="0e39c1fd-f413-4142-95f7-f50185e81fa4", data=session).json()
+output2 = client.save("session", id="<YOUR_SESSION_UUID>", data=session).json()
 
 
 # Creating a new session
@@ -116,7 +115,7 @@ output2 = client.save("session", id="0e39c1fd-f413-4142-95f7-f50185e81fa4", data
 ## required fields.
 session = {}
 session["name"] = "New session"
-session["projects"] = ['e7475834-7733-48cf-9e3b-f4f2d2d0305a']
+session["projects"] = ['<YOUR_PROJECT_UUID>']  # replace with a real project UUID
 session["description"] = 'description'
 
 ## Submitting session
@@ -126,7 +125,7 @@ output3 = client.save("session", data=session).json()
 # Deleting a session
 
 ## Pass the model name and the UUID of the record to remove.
-response = client.delete("session", id="0e39c1fd-f413-4142-95f7-f50185e81fa4")
+response = client.delete("session", id="<YOUR_SESSION_UUID>")
 if response.status_code == 204:
     print("Session deleted")
 
