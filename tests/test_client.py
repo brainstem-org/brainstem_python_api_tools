@@ -303,6 +303,7 @@ class TestLoadAll:
         responses = []
         for page in pages:
             r = MagicMock()
+            r.status_code = 200
             r.raise_for_status = MagicMock()
             r.json.return_value = page
             responses.append(r)

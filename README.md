@@ -103,9 +103,6 @@ client.save('session', id='<session-uuid>', data={'description': 'updated'})
 client.delete('session', id='<session-uuid>')
 ```
 
-## Contributing
-Contributions are welcome! Feel free to open issues or submit pull requests on GitHub.
-
 ## Command-line Interface
 
 After installation a `brainstem` command is available in your shell.

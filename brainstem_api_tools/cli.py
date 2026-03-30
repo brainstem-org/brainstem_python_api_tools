@@ -60,6 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- logout -----------------------------------------------------
     sub.add_parser(
         "logout",
+        parents=[common],
         help="Remove the cached API token.",
     )
 

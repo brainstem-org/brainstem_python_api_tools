@@ -270,7 +270,7 @@ class BrainstemClient:
         model = _resolve_model(model)
         portal = _resolve_portal(portal)
         app = _MODEL_TO_APP[model]
-        url = self._build_url(portal, app, model, id, options if id else None)
+        url = self._build_url(portal, app, model, id, options)
 
         params = {}
         if not id:
@@ -287,6 +287,9 @@ class BrainstemClient:
 
         if not load_all:
             return self._session.get(url, params=params, timeout=self.DEFAULT_TIMEOUT)
+
+        if id is not None:
+            raise ValueError("load_all=True cannot be used together with id.")
 
         # --- auto-paginate and merge all pages ---
         page_size = limit or 100
@@ -310,6 +313,11 @@ class BrainstemClient:
                 records_key = next(
                     (k for k, v in data.items() if isinstance(v, list)), None
                 )
+                if records_key is None:
+                    raise ValueError(
+                        "load_all=True requires a paginated list response, but the API "
+                        "returned no list-valued key. Use load_all=False for single-object endpoints."
+                    )
                 combined = {k: v for k, v in data.items() if k != records_key}
                 combined[records_key] = []
 
@@ -396,7 +404,7 @@ class BrainstemClient:
         merged_filters = dict(filters or {})
         for kwarg, api_field in filter_map.items():
             value = field_kwargs.get(kwarg)
-            if value:
+            if value is not None:
                 merged_filters[api_field] = value
         return self.load(
             model,
