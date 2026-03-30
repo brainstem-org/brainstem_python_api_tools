@@ -1,3 +1,33 @@
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "brainstem_python_api_tools"
+version = "2.0.0"
+description = "A Python toolset for interacting with the BrainSTEM API."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "BrainSTEM Team", email = "petersen.peter@gmail.com" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+]
+
+[project.urls]
+Homepage = "https://github.com/brainstem-org/brainstem_python_api_tools"
+
+[project.scripts]
+brainstem = "brainstem_api_tools.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["brainstem_api_tools*"]

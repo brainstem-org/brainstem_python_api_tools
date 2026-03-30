@@ -1,43 +1,101 @@
 import os
-from getpass import getpass
+import stat
+import time
+import webbrowser
+from enum import Enum
+from pathlib import Path
+
 import requests
 from requests.models import Response
-import json
-from enum import Enum
 
 
-class ModelType(Enum):
-    project = "project"
-    subject = "subject"
-    session = "session"
-    collection = "collection"
-    cohort = "cohort"
-    procedure = "procedure"
-    behavior = "behavior"
-    dataacquisition = "dataacquisition"
-    manipulation = "manipulation"
-    equipment = "equipment"
-    consumablestock = "consumablestock"
-    procedurelog = "procedurelog"
-    subjectlog = "subjectlog"
-    behavioralparadigm = "behavioralparadigm"
-    datastorage = "datastorage"
-    inventory = "inventory"
-    setup = "setup"
-    consumable = "consumable"
-    hardwaredevice = "hardwaredevice"
-    supplier = "supplier"
-    brainregion = "brainregion"
-    setuptype = "setuptype"
-    species = "species"
-    strain = "strain"
-    strainapproval = "strainapproval"
-    journal = "journal"
-    laboratory = "laboratory"
-    publication = "publication"
-    journalapproval = "journalapproval"
-    user = "user"
-    group = "group"
+# ---------------------------------------------------------------------------
+# Model → app routing table (single source of truth)
+# ---------------------------------------------------------------------------
+
+_MODEL_TO_APP: dict = {
+    # stem
+    "project": "stem",
+    "subject": "stem",
+    "session": "stem",
+    "collection": "stem",
+    "cohort": "stem",
+    "breeding": "stem",
+    "project_membership_invitation": "stem",
+    "project_group_membership_invitation": "stem",
+    # modules
+    "procedure": "modules",
+    "behavior": "modules",
+    "dataacquisition": "modules",
+    "manipulation": "modules",
+    "equipment": "modules",
+    "consumablestock": "modules",
+    "procedurelog": "modules",
+    "subjectlog": "modules",
+    # personal_attributes
+    "behavioralassay": "personal_attributes",
+    "datastorage": "personal_attributes",
+    "inventory": "personal_attributes",
+    "license": "personal_attributes",
+    "protocol": "personal_attributes",
+    "setup": "personal_attributes",
+    # resources
+    "consumable": "resources",
+    "hardwaredevice": "resources",
+    "supplier": "resources",
+    # taxonomies
+    "behavioralcategory": "taxonomies",
+    "behavioralparadigm": "taxonomies",
+    "brainregion": "taxonomies",
+    "regulatoryauthority": "taxonomies",
+    "setuptype": "taxonomies",
+    "species": "taxonomies",
+    "strain": "taxonomies",
+    "strainapproval": "taxonomies",
+    # dissemination
+    "journal": "dissemination",
+    "journalapproval": "dissemination",
+    "publication": "dissemination",
+    # users
+    "group": "users",
+    "group_membership_invitation": "users",
+    "group_membership_request": "users",
+    "laboratory": "users",
+    "user": "users",
+}
+
+_TOKEN_FILE = Path.home() / ".config" / "brainstem" / "token"
+
+# Derived from _MODEL_TO_APP so there is exactly one source of truth.
+ModelType = Enum("ModelType", {k: k for k in _MODEL_TO_APP})  # type: ignore[misc]
+
+_VALID_PORTALS = {"private", "public", "super"}
+
+
+def _resolve_model(model) -> str:
+    """Accept a plain string or a ModelType member and return the string value."""
+    if isinstance(model, ModelType):
+        return model.value
+    model = str(model)
+    if model not in _MODEL_TO_APP:
+        raise ValueError(
+            f"Unknown model '{model}'. Valid models are: "
+            + ", ".join(sorted(_MODEL_TO_APP))
+        )
+    return model
+
+
+def _resolve_portal(portal) -> str:
+    """Accept a plain string or a PortalType member and return the string value."""
+    if isinstance(portal, Enum):
+        portal = portal.value
+    portal = str(portal)
+    if portal not in _VALID_PORTALS:
+        raise ValueError(
+            f"Unknown portal '{portal}'. Valid portals are: "
+            + ", ".join(sorted(_VALID_PORTALS))
+        )
+    return portal
 
 
 class PortalType(Enum):
@@ -46,202 +104,480 @@ class PortalType(Enum):
     super = "super"
 
 
-class LoginError(Exception):
-    def __str__(self):
-        return f'User/password combination incorrect or user does not exist'
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
 
+class AuthenticationError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
 
 class BrainstemClient:
 
-    def __init__(self,
-                 token: str = None) -> None:
+    BASE_URL = "https://www.brainstem.org/"
 
-        # Server path
-        self._address = 'https://www.brainstem.org/api/'
+    def __init__(
+        self,
+        token: str = None,
+        headless: bool = False,
+        url: str = None,
+    ) -> None:
+        base = (url.rstrip("/") + "/") if url else self.BASE_URL
+        self._address = base + "api/"
+        self._session = requests.Session()
 
         if token:
             self._token = token
         else:
-            username = input("Please enter your username/email:")
-            password = getpass("Please enter your password:")
+            self._token = self._load_cached_token()
+            if not self._token:
+                self._token = self._device_auth_flow(headless=headless)
+                self._save_token(self._token)
 
-            self._token = self.__set_token_authentication(
-                url=self._address + "token/",
-                username=username,
-                password=password,
-            )
+        self._session.headers.update({"Authorization": f"Bearer {self._token}"})
 
-            print("Your authorization token is:\n", self._token)
-            print("\nPlease keep it in a safe place.")
+    # ------------------------------------------------------------------
+    # Token management
+    # ------------------------------------------------------------------
 
-    def __set_token_authentication(self,
-                                   url: str,
-                                   username: str,
-                                   password: str) -> str:
+    def _load_cached_token(self) -> str:
+        """Return the cached token from disk, or None if not present."""
+        if _TOKEN_FILE.exists():
+            return _TOKEN_FILE.read_text().strip() or None
+        return None
 
-        headers = {
-            "accept": "application/json",
-            "Content-Type": "application/json"
-        }
-        params = {
-            "username": username,
-            "password": password
-        }
-        resp = requests.post(url, headers=headers, json=params)
+    def _save_token(self, token: str) -> None:
+        """Persist the token to disk with owner-read-only permissions."""
+        _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TOKEN_FILE.write_text(token)
+        _TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
 
-        if resp.status_code != 200:
-            raise LoginError()
+    def _device_auth_flow(self, headless: bool = False) -> str:
+        """Run the BrainSTEM device authorization flow and return a token.
 
-        token = json.loads(resp.text)['token']
-        return token
+        The user authenticates in their browser (supports 2FA). No
+        credentials are sent by this tool.
 
-    def __get_app_from_model(self, modelname: str) -> str:
-        app = None
+        Parameters
+        ----------
+        headless : If ``True``, print the verification URI and user code
+                   instead of opening a browser window.
+        """
+        # Step 1 — initiate a device session
+        resp = requests.post(
+            self._address + "auth/device/",
+            json={"client_name": "brainstem-python"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-        if modelname in ['project', 'subject', 'session', 'collection', 'cohort',
-                         'projectmembershipinvitation',
-                         'projectgroupmembershipinvitation']:
-            app = 'stem'
+        device_code = data["device_code"]
+        interval = int(data.get("interval", 5))
 
-        elif modelname in ['procedure', 'behavior', 'dataacquisition', 'manipulation', 
-                           'equipment', 'consumablestock', 'procedurelog', 'subjectlog']:
-            app = 'modules'
-
-        elif modelname in ['behavioralparadigm', 'datastorage', 'inventory',
-                           'setup']:
-            app = 'personal_attributes'
-
-        elif any([x in modelname for x in
-                 ['consumable', 'hardwaredevice', 'supplier']]):
-            app = 'resources'
-
-        elif any([x in modelname for x in
-                 ['brainregion', 'setuptype',
-                  'species', 'strain']]):
-            app = 'taxonomies'
-
-        elif any([x in modelname for x in
-                 ['journal', 'laboratory', 'publication']]):
-            app = 'attributes'
-
-        elif modelname in ['user', 'group', 'groupmembershipinvitation',
-                           'groupmembershiprequest']:
-            app = 'users'
-
-        return app
-
-    def load_model(self,
-                   model: ModelType,
-                   portal: PortalType = "private",
-                   id: str = None,
-                   options: str = None,
-                   filters: dict = None,
-                   sort: list = None,
-                   include: list = None) -> Response:
-
-        app = self.__get_app_from_model(model)
-        if app is None:
-            resp = Response()
-            resp.status_code = 404
-            return resp
-
-        if options is None:
-            options = ""
-
-        if id:
-            query_parameters = id + "/" + options
+        # Step 2 — open browser or print instructions
+        if headless:
+            print(f"Open {data['verification_uri']} and enter: {data['user_code']}")
         else:
-            query_parameters = ""
+            webbrowser.open(data["verification_uri_complete"])
+            print("Waiting for browser approval...")
 
-            if filters:
-                for key in filters.keys():
-                    if query_parameters == "":
-                        prefix = "?"
-                    else:
-                        prefix = "&"
-                    query_parameters += (prefix
-                                         + "filter{" + key + "}="
-                                         + filters[key])
-            if sort:
-                for elem in sort:
-                    if query_parameters == "":
-                        prefix = "?"
-                    else:
-                        prefix = "&"
-                    query_parameters += prefix + "sort[]=" + elem
+        # Step 3 — poll until resolved
+        while True:
+            time.sleep(interval)
+            poll = requests.post(
+                self._address + "auth/device/token/",
+                json={"device_code": device_code},
+                timeout=10,
+            )
+            poll.raise_for_status()
+            result = poll.json()
 
-            if include:
-                for elem in include:
-                    if query_parameters == "":
-                        prefix = "?"
-                    else:
-                        prefix = "&"
-                    query_parameters += prefix + "include[]=" + elem + ".*"
+            if result.get("status") == "success":
+                return result["token"]
+            elif result.get("status") == "authorization_pending":
+                continue
+            else:
+                raise AuthenticationError(
+                    f"Authorization failed: {result.get('error')}"
+                )
 
-        request_url = (self._address + portal
-                       + "/" + app + "/" + model
-                       + "/" + query_parameters)
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-        resp = requests.get(request_url,
-                            headers={"Authorization": "Bearer %s"
-                                     % self._token})
-        return resp
+    def _build_url(self, portal: str, app: str, model: str,
+                   id: str = None, options: str = None) -> str:
+        url = f"{self._address}{portal}/{app}/{model}/"
+        if id:
+            url += f"{id}/"
+        if options:
+            url += options
+        return url
 
-    def save_model(self,
-                   model: ModelType,
-                   portal: PortalType = "private",
-                   id: str = None,
-                   data: dict = None,
-                   options: str = None) -> Response:
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-        app = self.__get_app_from_model(model)
-        if app is None:
-            resp = Response()
-            resp.status_code = 404
-            return resp
+    def load(self,
+             model,
+             portal="private",
+             id: str = None,
+             options: str = None,
+             filters: dict = None,
+             sort: list = None,
+             include: list = None,
+             limit: int = None,
+             offset: int = None,
+             load_all: bool = False):
+        """Load one or more records of *model*.
 
+        Parameters
+        ----------
+        model    : Model name string or ``ModelType`` member, e.g. ``'session'``.
+        portal   : ``'private'`` (default) or ``'public'``, or ``PortalType`` member.
+        id       : UUID of a specific record. Returns a single object when set.
+        filters  : Dict of field filters, e.g. ``{'name.icontains': 'rat'}``.
+                   Supports ``.icontains``, ``.startswith``, ``.endswith``,
+                   ``.gt``, ``.gte``, ``.lt``, ``.lte``.
+        sort     : List of fields to sort by. Prefix with ``'-'`` for descending.
+        include  : Related models to embed, e.g. ``['dataacquisition', 'behaviors']``.
+        limit    : Max records per page (API maximum: 100).
+        offset   : Number of records to skip (for pagination).
+        load_all : When ``True``, automatically follow pagination and return a
+                   combined ``dict`` with all records merged under the model key.
+                   When ``False`` (default), returns the raw ``Response``.
+        """
+        model = _resolve_model(model)
+        portal = _resolve_portal(portal)
+        app = _MODEL_TO_APP[model]
+        url = self._build_url(portal, app, model, id, options if id else None)
+
+        params = {}
+        if not id:
+            for key, val in (filters or {}).items():
+                params[f"filter{{{key}}}"] = val
+            for field in (sort or []):
+                params.setdefault("sort[]", []).append(field)
+            for rel in (include or []):
+                params.setdefault("include[]", []).append(f"{rel}.*")
+            if limit is not None:
+                params["limit"] = limit
+            if offset is not None:
+                params["offset"] = offset
+
+        if not load_all:
+            return self._session.get(url, params=params)
+
+        # --- auto-paginate and merge all pages ---
+        page_size = limit or 100
+        params["limit"] = page_size
+        params.setdefault("offset", offset or 0)
+
+        combined: dict = {}
+        records_key: str = None
+
+        while True:
+            resp = self._session.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if records_key is None:
+                # Detect the list key (e.g. 'sessions', 'projects')
+                records_key = next(
+                    (k for k, v in data.items() if isinstance(v, list)), None
+                )
+                combined = {k: v for k, v in data.items() if k != records_key}
+                combined[records_key] = []
+
+            combined[records_key].extend(data.get(records_key, []))
+            total = data.get("count", len(combined[records_key]))
+
+            if len(combined[records_key]) >= total:
+                break
+
+            params["offset"] = params.get("offset", 0) + page_size
+
+        return combined
+
+    def save(self,
+             model,
+             portal="private",
+             id: str = None,
+             data: dict = None,
+             options: str = None) -> Response:
+        """Create or update a record.
+
+        When *id* is provided the record is **updated** (PATCH).
+        When *id* is omitted a **new record** is created (POST).
+
+        Parameters
+        ----------
+        model   : Model name string or ``ModelType`` member, e.g. ``'session'``.
+        portal  : ``'private'`` (default) or ``'public'``, or ``PortalType`` member.
+        id      : UUID of the record to update. Omit to create a new record.
+        data    : Dict of fields to submit.
+        """
+        model = _resolve_model(model)
+        portal = _resolve_portal(portal)
+        app = _MODEL_TO_APP[model]
         if data is None:
             data = {}
 
-        if options is None:
-            options = ""
-
-        # Check if entry already exists
         if id is not None:
-            # This is an update request
-            request_url = (self._address + portal + "/" + app + "/" + model
-                           + "/" + id + "/" + options)
-            resp = requests.patch(request_url, json=data,
-                                  headers={"Authorization": "Bearer %s"
-                                           % self._token})
-
+            url = self._build_url(portal, app, model, id, options)
+            return self._session.patch(url, json=data)
         else:
-            # This is a create request
-            request_url = (self._address + portal + "/" + app + "/"
-                           + model + "/" + options)
-            resp = requests.post(request_url, json=data,
-                                 headers={"Authorization": "Bearer %s"
-                                          % self._token})
+            url = self._build_url(portal, app, model, options=options)
+            return self._session.post(url, json=data)
 
-        return resp
+    def delete(self,
+               model,
+               portal="private",
+               id: str = None) -> Response:
+        """Delete a record by ID.
 
-    def delete_model(self,
-                     model: ModelType,
-                     portal: PortalType = "private",
-                     id: str = None):
+        Parameters
+        ----------
+        model   : Model name string or ``ModelType`` member, e.g. ``'session'``.
+        portal  : ``'private'`` (default) or ``'public'``, or ``PortalType`` member.
+        id      : UUID of the record to delete (required).
+        """
+        if id is None:
+            raise ValueError("'id' is required to delete a record.")
+        model = _resolve_model(model)
+        portal = _resolve_portal(portal)
+        app = _MODEL_TO_APP[model]
+        url = self._build_url(portal, app, model, id)
+        return self._session.delete(url)
 
-        app = self.__get_app_from_model(model)
-        if app is None:
-            resp = Response()
-            resp.status_code = 404
-            return resp
+    # ------------------------------------------------------------------
+    # Convenience loaders  (mirror the MATLAB load_* helpers)
+    # ------------------------------------------------------------------
 
-        # Check if entry already exists
-        if id is not None:
-            request_url = (self._address + portal + "/" + app + "/" + model
-                           + "/" + id + "/")
-            resp = requests.delete(request_url,
-                                   headers={"Authorization": "Bearer %s"
-                                            % self._token})
+    def _convenience_load(self, model, default_include, filter_map,
+                          portal, id, filters, sort, include, limit, offset,
+                          load_all, **field_kwargs):
+        """Shared implementation for all convenience loaders."""
+        merged_filters = dict(filters or {})
+        for kwarg, api_field in filter_map.items():
+            value = field_kwargs.get(kwarg)
+            if value:
+                merged_filters[api_field] = value
+        return self.load(
+            model,
+            portal=portal,
+            id=id,
+            filters=merged_filters or None,
+            sort=sort,
+            include=include if include is not None else default_include,
+            limit=limit,
+            offset=offset,
+            load_all=load_all,
+        )
 
-            return resp
+    def load_project(self, portal="private", id: str = None,
+                     name: str = None, sessions: str = None,
+                     subjects: str = None, tags: str = None,
+                     filters: dict = None, sort: list = None,
+                     include: list = None, limit: int = None,
+                     offset: int = 0, load_all: bool = False):
+        """Load project(s). Embeds sessions, subjects, collections and cohorts by default.
+
+        Parameters
+        ----------
+        name     : Filter by project name (case-insensitive contains).
+        sessions : Filter by session UUID.
+        subjects : Filter by subject UUID.
+        tags     : Filter by tag.
+        """
+        return self._convenience_load(
+            "project",
+            default_include=["sessions", "subjects", "collections", "cohorts"],
+            filter_map={"name": "name.icontains", "sessions": "sessions.id",
+                        "subjects": "subjects.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, sessions=sessions, subjects=subjects, tags=tags,
+        )
+
+    def load_subject(self, portal="private", id: str = None,
+                     name: str = None, projects: str = None,
+                     strain: str = None, sex: str = None, tags: str = None,
+                     filters: dict = None, sort: list = None,
+                     include: list = None, limit: int = None,
+                     offset: int = 0, load_all: bool = False):
+        """Load subject(s). Embeds procedures and subjectlogs by default.
+
+        Parameters
+        ----------
+        name     : Filter by subject name (case-insensitive contains).
+        projects : Filter by project UUID.
+        strain   : Filter by strain UUID.
+        sex      : Filter by sex (``'M'``, ``'F'``, or ``'U'``).
+        tags     : Filter by tag.
+        """
+        return self._convenience_load(
+            "subject",
+            default_include=["procedures", "subjectlogs"],
+            filter_map={"name": "name.icontains", "projects": "projects.id",
+                        "strain": "strain.id", "sex": "sex", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, projects=projects, strain=strain, sex=sex, tags=tags,
+        )
+
+    def load_session(self, portal="private", id: str = None,
+                     name: str = None, projects: str = None,
+                     datastorage: str = None, tags: str = None,
+                     filters: dict = None, sort: list = None,
+                     include: list = None, limit: int = None,
+                     offset: int = 0, load_all: bool = False):
+        """Load session(s). Embeds dataacquisition, behaviors, manipulations and epochs by default.
+
+        Parameters
+        ----------
+        name        : Filter by session name (case-insensitive contains).
+        projects    : Filter by project UUID.
+        datastorage : Filter by data storage UUID.
+        tags        : Filter by tag.
+        """
+        return self._convenience_load(
+            "session",
+            default_include=["dataacquisition", "behaviors", "manipulations", "epochs"],
+            filter_map={"name": "name.icontains", "projects": "projects.id",
+                        "datastorage": "datastorage.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, projects=projects, datastorage=datastorage, tags=tags,
+        )
+
+    def load_collection(self, portal="private", id: str = None,
+                        name: str = None, tags: str = None,
+                        filters: dict = None, sort: list = None,
+                        include: list = None, limit: int = None,
+                        offset: int = 0, load_all: bool = False):
+        """Load collection(s). Embeds sessions by default.
+
+        Parameters
+        ----------
+        name : Filter by collection name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "collection",
+            default_include=["sessions"],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_cohort(self, portal="private", id: str = None,
+                    name: str = None, tags: str = None,
+                    filters: dict = None, sort: list = None,
+                    include: list = None, limit: int = None,
+                    offset: int = 0, load_all: bool = False):
+        """Load cohort(s). Embeds subjects by default.
+
+        Parameters
+        ----------
+        name : Filter by cohort name (case-insensitive contains).
+        tags : Filter by tag.
+        """
+        return self._convenience_load(
+            "cohort",
+            default_include=["subjects"],
+            filter_map={"name": "name.icontains", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            name=name, tags=tags,
+        )
+
+    def load_behavior(self, portal="private", id: str = None,
+                      session: str = None, tags: str = None,
+                      filters: dict = None, sort: list = None,
+                      include: list = None, limit: int = None,
+                      offset: int = 0, load_all: bool = False):
+        """Load behavior record(s).
+
+        Parameters
+        ----------
+        session : Filter by session UUID.
+        tags    : Filter by tag.
+        """
+        return self._convenience_load(
+            "behavior",
+            default_include=[],
+            filter_map={"session": "session.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            session=session, tags=tags,
+        )
+
+    def load_dataacquisition(self, portal="private", id: str = None,
+                             session: str = None, tags: str = None,
+                             filters: dict = None, sort: list = None,
+                             include: list = None, limit: int = None,
+                             offset: int = 0, load_all: bool = False):
+        """Load data acquisition record(s).
+
+        Parameters
+        ----------
+        session : Filter by session UUID.
+        tags    : Filter by tag.
+        """
+        return self._convenience_load(
+            "dataacquisition",
+            default_include=[],
+            filter_map={"session": "session.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            session=session, tags=tags,
+        )
+
+    def load_manipulation(self, portal="private", id: str = None,
+                          session: str = None, tags: str = None,
+                          filters: dict = None, sort: list = None,
+                          include: list = None, limit: int = None,
+                          offset: int = 0, load_all: bool = False):
+        """Load manipulation record(s).
+
+        Parameters
+        ----------
+        session : Filter by session UUID.
+        tags    : Filter by tag.
+        """
+        return self._convenience_load(
+            "manipulation",
+            default_include=[],
+            filter_map={"session": "session.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            session=session, tags=tags,
+        )
+
+    def load_procedure(self, portal="private", id: str = None,
+                       subject: str = None, tags: str = None,
+                       filters: dict = None, sort: list = None,
+                       include: list = None, limit: int = None,
+                       offset: int = 0, load_all: bool = False):
+        """Load procedure record(s).
+
+        Parameters
+        ----------
+        subject : Filter by subject UUID.
+        tags    : Filter by tag.
+        """
+        return self._convenience_load(
+            "procedure",
+            default_include=[],
+            filter_map={"subject": "subject.id", "tags": "tags"},
+            portal=portal, id=id, filters=filters, sort=sort, include=include,
+            limit=limit, offset=offset, load_all=load_all,
+            subject=subject, tags=tags,
+        )
