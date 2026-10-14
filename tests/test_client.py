@@ -4,12 +4,18 @@ All HTTP calls are intercepted with pytest-mock / unittest.mock so no
 network access is required.
 """
 
+import gzip
+import hashlib
+import json
+
 import pytest
+import requests
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from brainstem_api_tools.brainstem_api_client import (
     BrainstemClient,
     AuthenticationError,
+    ExportError,
     _MODEL_TO_APP,
     _resolve_model,
     _resolve_portal,
@@ -322,15 +328,172 @@ class TestLoadAll:
             {"sessions": [{"id": "1"}, {"id": "2"}], "count": 3},
             {"sessions": [{"id": "3"}],               "count": 3},
         ])
-        result = self.client.load("session", load_all=True)
+        result = self.client.load("session", limit=2, load_all=True)
         assert len(result["sessions"]) == 3
         assert [r["id"] for r in result["sessions"]] == ["1", "2", "3"]
+
+    def test_meta_total_pages_drives_paging(self):
+        meta = {"per_page": 100, "total_results": 3, "total_pages": 2}
+        self._mock_pages([
+            {"sessions": [{"id": "1"}, {"id": "2"}], "meta": {**meta, "page": 1}},
+            {"sessions": [{"id": "3"}],               "meta": {**meta, "page": 2}},
+        ])
+        result = self.client.load("session", load_all=True)
+        assert [r["id"] for r in result["sessions"]] == ["1", "2", "3"]
+        pages = [c[1]["params"]["page"] for c in self.client._session.get.call_args_list]
+        assert pages == [1, 2]
+        params = self.client._session.get.call_args[1]["params"]
+        assert params["per_page"] == 100
+        assert "limit" not in params and "offset" not in params
+
+    def test_sideloaded_lists_merged_and_deduplicated(self):
+        meta = {"total_pages": 2}
+        self._mock_pages([
+            {"data_acquisitions": [{"id": "da1"}], "sessions": [{"id": "1"}], "meta": meta},
+            {"data_acquisitions": [{"id": "da1"}, {"id": "da2"}], "sessions": [{"id": "2"}], "meta": meta},
+        ])
+        result = self.client.load("session", include=["dataacquisition"], load_all=True)
+        assert [r["id"] for r in result["sessions"]] == ["1", "2"]
+        assert [r["id"] for r in result["data_acquisitions"]] == ["da1", "da2"]
+
+    def test_offset_translated_to_page(self):
+        self._mock_pages([{"sessions": [{"id": "3"}], "meta": {"total_pages": 2}}])
+        self.client.load("session", limit=2, offset=2, load_all=True)
+        assert self.client._session.get.call_args[1]["params"]["page"] == 2
+
+    def test_offset_not_multiple_of_limit_raises(self):
+        with pytest.raises(ValueError, match="multiple of limit"):
+            self.client.load("session", limit=10, offset=5, load_all=True)
 
     def test_load_all_false_returns_response(self):
         r = MagicMock()
         self.client._session.get = MagicMock(return_value=r)
         result = self.client.load("session", load_all=False)
         assert result is r
+
+
+# ---------------------------------------------------------------------------
+# export_project()
+# ---------------------------------------------------------------------------
+
+PROJECT_ID = "11111111-0000-0000-0000-000000000000"
+JOB_ID = "22222222-0000-0000-0000-000000000000"
+EXPORT_URL = f"https://www.brainstem.org/api/private/stem/project/{PROJECT_ID}/export/"
+PAYLOAD = {
+    "export_info": {"format_version": "2.0", "project_id": PROJECT_ID, "record_count": 1,
+                    "counts": {"stem.project": 1}},
+    "records": {"stem.project": [{"model": "stem.project", "pk": PROJECT_ID, "fields": {}}]},
+}
+
+
+def export_response(status_code=200, json_body=None, content=None, content_type="application/json"):
+    resp = mock_response(status_code, json_body)
+    resp.headers = {"Content-Type": content_type}
+    resp.reason = "reason"
+    if content is not None:
+        resp.content = content
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = requests.HTTPError(str(status_code))
+    return resp
+
+
+def job(status, **extra):
+    return {"export_job": {"id": JOB_ID, "status": status, "progress_percent": 0, **extra}}
+
+
+class TestExportProject:
+    def setup_method(self):
+        self.client = make_client()
+
+    def test_direct_export_returns_payload(self):
+        with patch("requests.get", return_value=export_response(200, PAYLOAD)) as get:
+            result = self.client.export_project(PROJECT_ID)
+        assert result == PAYLOAD
+        assert get.call_args[0][0] == EXPORT_URL
+        assert get.call_args[1]["headers"]["Authorization"] == f"Bearer {TOKEN}"
+
+    def test_direct_export_bypasses_session_retries(self):
+        self.client._session.get = MagicMock()
+        with patch("requests.get", return_value=export_response(200, PAYLOAD)):
+            self.client.export_project(PROJECT_ID)
+        self.client._session.get.assert_not_called()
+
+    def test_direct_timeout_suggests_background(self):
+        with patch("requests.get", return_value=export_response(503, content_type="text/html")):
+            with pytest.raises(ExportError, match="background=True"):
+                self.client.export_project(PROJECT_ID)
+
+    def test_server_without_endpoint(self):
+        with patch("requests.get", return_value=export_response(404, content_type="text/html")):
+            with pytest.raises(ExportError, match="does not support project export"):
+                self.client.export_project(PROJECT_ID)
+
+    def test_unknown_project_raises_http_error(self):
+        with patch("requests.get", return_value=export_response(404, {"detail": "Not found."})):
+            with pytest.raises(requests.HTTPError):
+                self.client.export_project(PROJECT_ID)
+
+    def test_forbidden(self):
+        with patch("requests.get", return_value=export_response(403, {"detail": "x"})):
+            with pytest.raises(ExportError, match="contributor"):
+                self.client.export_project(PROJECT_ID)
+
+    def test_401_raises_authentication_error(self):
+        with patch("requests.get", return_value=export_response(401, {"detail": "x"})):
+            with pytest.raises(AuthenticationError):
+                self.client.export_project(PROJECT_ID)
+
+    def test_throttled_shows_server_detail(self):
+        with patch("requests.get", return_value=export_response(429, {"detail": "Request was throttled."})):
+            with pytest.raises(ExportError, match="throttled"):
+                self.client.export_project(PROJECT_ID)
+
+    def test_missing_id_raises(self):
+        with pytest.raises(ValueError, match="project_id"):
+            self.client.export_project(None)
+
+    def _run_background(self, final_job, download):
+        self.client._session.post = MagicMock(return_value=export_response(202, job("pending")))
+        self.client._session.get = MagicMock(side_effect=[
+            export_response(200, job("running")),
+            export_response(200, final_job),
+            download,
+        ])
+        with patch("time.sleep"):
+            return self.client.export_project(PROJECT_ID, background=True)
+
+    def test_background_export_polls_downloads_and_unpacks(self):
+        gz = gzip.compress(json.dumps(PAYLOAD).encode())
+        download_path = f"/api/private/stem/project/{PROJECT_ID}/export-jobs/{JOB_ID}/download/"
+        result = self._run_background(
+            job("completed", download_url=download_path, file_sha256=hashlib.sha256(gz).hexdigest()),
+            export_response(200, content=gz, content_type="application/gzip"),
+        )
+        assert result == PAYLOAD
+        assert self.client._session.post.call_args[0][0] == EXPORT_URL
+        urls = [c[0][0] for c in self.client._session.get.call_args_list]
+        assert urls[0].endswith(f"/project/{PROJECT_ID}/export-jobs/{JOB_ID}/")
+        assert urls[2] == "https://www.brainstem.org" + download_path
+
+    def test_background_checksum_mismatch(self):
+        gz = gzip.compress(json.dumps(PAYLOAD).encode())
+        with pytest.raises(ExportError, match="checksum"):
+            self._run_background(
+                job("completed", download_url="/x/", file_sha256="0" * 64),
+                export_response(200, content=gz, content_type="application/gzip"),
+            )
+
+    def test_background_failed_job_raises_server_message(self):
+        with pytest.raises(ExportError, match="no longer export"):
+            self._run_background(
+                job("failed", error_message="The requester can no longer export this project."), None,
+            )
+
+    def test_background_timeout(self):
+        self.client._session.post = MagicMock(return_value=export_response(202, job("pending")))
+        self.client._session.get = MagicMock(return_value=export_response(200, job("running")))
+        with patch("time.sleep"), pytest.raises(ExportError, match=JOB_ID):
+            self.client.export_project(PROJECT_ID, background=True, timeout=-1)
 
 
 # ---------------------------------------------------------------------------

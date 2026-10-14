@@ -103,6 +103,57 @@ client.save('session', id='<session-uuid>', data={'description': 'updated'})
 client.delete('session', id='<session-uuid>')
 ```
 
+## Exporting a project
+
+`export_project()` returns a whole project as one JSON-serializable dict. It is the same file as the JSON download on the BrainSTEM website (**Project → Download → JSON**). Use it for backups, NWB conversion, external integrations or analysis pipelines. You need contributor (change) access to the project.
+
+```python
+import json
+
+export = client.export_project('<project-uuid>')
+
+print(export['export_info']['format_version'], export['export_info']['counts'])
+for record in export['records']['stem.session']:
+    print(record['pk'], record['fields']['name'])
+
+with open('project_backup.json', 'w') as f:
+    json.dump(export, f)
+```
+
+Large projects can take longer than the server's 30-second request limit. For those, pass `background=True`: the server builds the export as a job, the client waits for it and downloads the result, and you also get an email when it is ready.
+
+```python
+export = client.export_project('<project-uuid>', background=True)
+```
+
+The export has this structure:
+
+```text
+{
+  "export_info": {
+    "format_version": "2.0",
+    "exported_at": "<ISO 8601 UTC timestamp>",
+    "project_id": "<project uuid>",
+    "lab_resources": "<which lab resources are included>",
+    "record_count": 2344,
+    "counts": {"stem.project": 1, "stem.subject": 21, ...}
+  },
+  "records": {
+    "stem.project": [{"model": "stem.project", "pk": "<uuid>", "fields": {...}}],
+    "stem.subject": [...],
+    "stem.session": [...],
+    ...
+  }
+}
+```
+
+- `records` is keyed by model label (`app_label.model_name`). Every label is always present, with an empty list when the project has no such records.
+- Links to other records are primary keys. Many-to-many links are sorted lists of primary keys.
+- Lab resources (setups, data storages, equipment, protocols, ...) are included when you can read them and the project uses them. Two people exporting the same project can therefore get different lab resources.
+- A minor format version (2.1, 2.2, ...) only adds labels and keys, so ignore any you don't recognise.
+
+Problems raise `ExportError` with a readable message, for example when you lack access, a background job fails, or the server doesn't support exports yet.
+
 ## Command-line Interface
 
 After installation a `brainstem` command is available in your shell.

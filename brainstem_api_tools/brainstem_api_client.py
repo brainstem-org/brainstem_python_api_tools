@@ -1,3 +1,6 @@
+import gzip
+import hashlib
+import json
 import os
 import stat
 import time
@@ -115,6 +118,10 @@ class AuthenticationError(Exception):
     pass
 
 
+class ExportError(Exception):
+    """A project export could not be produced or downloaded."""
+
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -131,6 +138,7 @@ class BrainstemClient:
         url: str = None,
     ) -> None:
         base = (url.rstrip("/") + "/") if url else self.BASE_URL
+        self._base_url = base
         self._address = base + "api/"
         self._session = requests.Session()
 
@@ -291,43 +299,69 @@ class BrainstemClient:
         if id is not None:
             raise ValueError("load_all=True cannot be used together with id.")
 
-        # --- auto-paginate and merge all pages ---
+        # The API paginates with page/per_page; translate limit/offset.
         page_size = limit or 100
-        params["limit"] = page_size
-        params.setdefault("offset", offset or 0)
+        if offset and offset % page_size:
+            raise ValueError(
+                "With load_all=True, offset must be a multiple of limit (the page size)."
+            )
+        params.pop("limit", None)
+        params.pop("offset", None)
+        return self._load_all_pages(url, params, page_size,
+                                    start_page=(offset or 0) // page_size + 1)
 
+    def _get_json(self, url: str, params: dict = None) -> dict:
+        """GET *url* and return the decoded JSON, raising on HTTP errors."""
+        resp = self._session.get(url, params=params, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code == 401:
+            raise AuthenticationError(
+                "API token is invalid or expired. Run `brainstem login` to re-authenticate."
+            )
+        resp.raise_for_status()
+        return resp.json()
+
+    def _load_all_pages(self, url: str, params: dict,
+                        page_size: int = 100, start_page: int = 1) -> dict:
+        """Follow pagination and merge every page into a single dict.
+
+        All list-valued keys are concatenated across pages: the primary
+        records as well as any sideloaded related records (de-duplicated by
+        ``id``). Non-list keys are taken from the first page.
+        """
+        params = dict(params, per_page=page_size)
+        page = start_page
         combined: dict = {}
-        records_key: str = None
+        seen_ids: dict = {}
 
         while True:
-            resp = self._session.get(url, params=params, timeout=self.DEFAULT_TIMEOUT)
-            if resp.status_code == 401:
-                raise AuthenticationError(
-                    "API token is invalid or expired. Run `brainstem login` to re-authenticate."
-                )
-            resp.raise_for_status()
-            data = resp.json()
+            data = self._get_json(url, dict(params, page=page))
+            lists = {k: v for k, v in data.items() if isinstance(v, list)}
 
-            if records_key is None:
-                # Detect the list key (e.g. 'sessions', 'projects')
-                records_key = next(
-                    (k for k, v in data.items() if isinstance(v, list)), None
-                )
-                if records_key is None:
+            if not combined:
+                if not lists:
                     raise ValueError(
                         "load_all=True requires a paginated list response, but the API "
                         "returned no list-valued key. Use load_all=False for single-object endpoints."
                     )
-                combined = {k: v for k, v in data.items() if k != records_key}
-                combined[records_key] = []
+                combined = {k: v for k, v in data.items() if k not in lists}
 
-            combined[records_key].extend(data.get(records_key, []))
-            total = data.get("count", len(combined[records_key]))
+            for key, records in lists.items():
+                bucket = combined.setdefault(key, [])
+                ids = seen_ids.setdefault(key, set())
+                for record in records:
+                    rid = record.get("id") if isinstance(record, dict) else None
+                    if rid is not None:
+                        if rid in ids:
+                            continue
+                        ids.add(rid)
+                    bucket.append(record)
 
-            if len(combined[records_key]) >= total:
+            total_pages = (data.get("meta") or {}).get("total_pages")
+            if total_pages is None and "count" in data:
+                total_pages = -(-data["count"] // page_size)  # ceil division
+            if total_pages is None or page >= total_pages or not any(lists.values()):
                 break
-
-            params["offset"] = params.get("offset", 0) + page_size
+            page += 1
 
         return combined
 
@@ -381,6 +415,102 @@ class BrainstemClient:
         app = _MODEL_TO_APP[model]
         url = self._build_url(portal, app, model, id)
         return self._session.delete(url, timeout=self.DEFAULT_TIMEOUT)
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+
+    EXPORT_TIMEOUT: int = 90  # seconds; the server builds the whole project per request
+
+    def export_project(self, project_id: str, background: bool = False,
+                       poll_interval: float = 5.0, timeout: float = 3600) -> dict:
+        """Export a project as the server's versioned JSON export.
+
+        Returns the same payload as the JSON download on the BrainSTEM website
+        (format documented in the server's ``docs/project-export-format.md``)::
+
+            {
+              "export_info": {"format_version", "exported_at", "project_id",
+                              "lab_resources", "record_count", "counts"},
+              "records": {"stem.project": [...], "stem.subject": [...], ...}
+            }
+
+        Each record has the shape ``{"model", "pk", "fields"}``. Exporting
+        requires contributor (change) access to the project.
+
+        Parameters
+        ----------
+        project_id    : UUID of the project to export.
+        background    : When ``True``, queue the export as a server-side job,
+                        wait for it to finish and download the result. Use this
+                        for large projects, which can exceed the server's
+                        30-second request limit. The server also emails you
+                        when the job finishes.
+        poll_interval : Seconds between job status checks (background only).
+        timeout       : Maximum seconds to wait for the job (background only).
+        """
+        if not project_id:
+            raise ValueError("'project_id' is required to export a project.")
+        url = self._build_url("private", "stem", "project", project_id, "export/")
+
+        if not background:
+            # Bypass the session's automatic retries: a timed-out export would be
+            # rebuilt up to three more times, each counting against the export rate limit.
+            resp = requests.get(url, headers=self._session.headers, timeout=self.EXPORT_TIMEOUT)
+            if resp.status_code in (503, 504):
+                raise ExportError(
+                    "The export did not finish within the server's request time limit. "
+                    "Use export_project(..., background=True) for large projects."
+                )
+            self._check_export_response(resp)
+            return resp.json()
+
+        resp = self._session.post(url, timeout=self.DEFAULT_TIMEOUT)
+        self._check_export_response(resp)
+        job = resp.json()["export_job"]
+        job_url = self._build_url("private", "stem", "project", project_id,
+                                  f"export-jobs/{job['id']}/")
+
+        deadline = time.monotonic() + timeout
+        while job["status"] in ("pending", "running"):
+            if time.monotonic() > deadline:
+                raise ExportError(
+                    f"Export job {job['id']} did not finish within {timeout} seconds "
+                    f"(status: {job['status']}, {job.get('progress_percent', 0)}%)."
+                )
+            time.sleep(poll_interval)
+            job = self._get_json(job_url)["export_job"]
+
+        if job["status"] != "completed":
+            raise ExportError(job.get("error_message") or f"Export job ended as '{job['status']}'.")
+
+        resp = self._session.get(self._base_url + job["download_url"].lstrip("/"),
+                                 timeout=self.EXPORT_TIMEOUT)
+        self._check_export_response(resp)
+        content = resp.content
+        if content[:2] == b"\x1f\x8b":  # gzip magic number
+            expected = job.get("file_sha256")
+            if expected and hashlib.sha256(content).hexdigest() != expected:
+                raise ExportError(f"Export job {job['id']}: downloaded file failed its checksum.")
+            content = gzip.decompress(content)
+        return json.loads(content)
+
+    def _check_export_response(self, resp: Response) -> None:
+        """Turn export endpoint errors into clear exceptions."""
+        if resp.ok:
+            return
+        if resp.status_code == 401:
+            raise AuthenticationError(
+                "API token is invalid or expired. Run `brainstem login` to re-authenticate."
+            )
+        is_json = "json" in resp.headers.get("Content-Type", "")
+        if resp.status_code == 404 and not is_json:
+            raise ExportError("This BrainSTEM server does not support project export yet.")
+        if resp.status_code == 403:
+            raise ExportError("Exporting a project requires contributor (change) access to it.")
+        if resp.status_code in (409, 410, 429) and is_json:
+            raise ExportError(resp.json().get("detail", resp.reason))
+        resp.raise_for_status()
 
     def __enter__(self):
         return self
