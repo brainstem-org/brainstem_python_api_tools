@@ -420,7 +420,7 @@ class BrainstemClient:
     # Export
     # ------------------------------------------------------------------
 
-    EXPORT_TIMEOUT: int = 90  # seconds; the server builds the whole project per request
+    EXPORT_TIMEOUT: int = 90  # seconds; the server builds the whole export per request
 
     def export_project(self, project_id: str, background: bool = False,
                        poll_interval: float = 5.0, timeout: float = 3600) -> dict:
@@ -430,13 +430,15 @@ class BrainstemClient:
         (format documented in the server's ``docs/project-export-format.md``)::
 
             {
-              "export_info": {"format_version", "exported_at", "project_id",
-                              "lab_resources", "record_count", "counts"},
+              "export_info": {"format_version", "exported_at", "scope",
+                              "project_id", "project_ids", "session_id",
+                              "lab_resources", "restricted", "record_count",
+                              "counts"},
               "records": {"stem.project": [...], "stem.subject": [...], ...}
             }
 
         Each record has the shape ``{"model", "pk", "fields"}``. Exporting
-        requires contributor (change) access to the project.
+        requires read access to the project.
 
         Parameters
         ----------
@@ -449,9 +451,35 @@ class BrainstemClient:
         poll_interval : Seconds between job status checks (background only).
         timeout       : Maximum seconds to wait for the job (background only).
         """
-        if not project_id:
-            raise ValueError("'project_id' is required to export a project.")
-        url = self._build_url("private", "stem", "project", project_id, "export/")
+        return self._export("project", project_id, background, poll_interval, timeout)
+
+    def export_session(self, session_id: str, background: bool = False,
+                       poll_interval: float = 5.0, timeout: float = 3600) -> dict:
+        """Export one session and everything it touches: the content of one NWB file.
+
+        Returns the same format as ``export_project`` (``export_info.scope`` is
+        ``"session"``), holding the session with its data acquisitions,
+        manipulations, behaviors and epochs; the subjects and specimen sets
+        linked to it with their full procedure and log history; the session's
+        projects; and the lab resources, catalog entries and users these
+        reference. Only records you can read are included, in any of the
+        session's projects.
+
+        A subject's procedure history is complete, including procedures after
+        the session, so filter by date where that matters. Exporting requires
+        read access to one of the session's projects.
+
+        Parameters are the same as for ``export_project``, with
+        ``session_id`` the UUID of the session to export.
+        """
+        return self._export("session", session_id, background, poll_interval, timeout)
+
+    def _export(self, model: str, record_id: str, background: bool,
+                poll_interval: float, timeout: float) -> dict:
+        """Run a direct or background export of a project or session record."""
+        if not record_id:
+            raise ValueError(f"'{model}_id' is required to export a {model}.")
+        url = self._build_url("private", "stem", model, record_id, "export/")
 
         if not background:
             # Bypass the session's automatic retries: a timed-out export would be
@@ -460,15 +488,15 @@ class BrainstemClient:
             if resp.status_code in (503, 504):
                 raise ExportError(
                     "The export did not finish within the server's request time limit. "
-                    "Use export_project(..., background=True) for large projects."
+                    f"Use export_{model}(..., background=True) for large exports."
                 )
-            self._check_export_response(resp)
+            self._check_export_response(resp, model)
             return resp.json()
 
         resp = self._session.post(url, timeout=self.DEFAULT_TIMEOUT)
-        self._check_export_response(resp)
+        self._check_export_response(resp, model)
         job = resp.json()["export_job"]
-        job_url = self._build_url("private", "stem", "project", project_id,
+        job_url = self._build_url("private", "stem", model, record_id,
                                   f"export-jobs/{job['id']}/")
 
         deadline = time.monotonic() + timeout
@@ -486,7 +514,7 @@ class BrainstemClient:
 
         resp = self._session.get(self._base_url + job["download_url"].lstrip("/"),
                                  timeout=self.EXPORT_TIMEOUT)
-        self._check_export_response(resp)
+        self._check_export_response(resp, model)
         content = resp.content
         if content[:2] == b"\x1f\x8b":  # gzip magic number
             expected = job.get("file_sha256")
@@ -495,7 +523,7 @@ class BrainstemClient:
             content = gzip.decompress(content)
         return json.loads(content)
 
-    def _check_export_response(self, resp: Response) -> None:
+    def _check_export_response(self, resp: Response, model: str) -> None:
         """Turn export endpoint errors into clear exceptions."""
         if resp.ok:
             return
@@ -504,11 +532,14 @@ class BrainstemClient:
                 "API token is invalid or expired. Run `brainstem login` to re-authenticate."
             )
         is_json = "json" in resp.headers.get("Content-Type", "")
-        if resp.status_code == 404 and not is_json:
-            raise ExportError("This BrainSTEM server does not support project export yet.")
+        if resp.status_code == 404:
+            if not is_json:
+                raise ExportError(f"This BrainSTEM server does not support {model} export yet.")
+            # The API answers 404, not 403, when the record exists but you cannot read it.
+            raise ExportError(f"The {model} was not found, or you do not have read access to it.")
         if resp.status_code == 403:
-            raise ExportError("Exporting a project requires contributor (change) access to it.")
-        if resp.status_code in (409, 410, 429) and is_json:
+            raise ExportError(f"You do not have permission to export this {model}.")
+        if resp.status_code in (400, 409, 410, 429) and is_json:
             raise ExportError(resp.json().get("detail", resp.reason))
         resp.raise_for_status()
 

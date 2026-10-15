@@ -373,7 +373,7 @@ class TestLoadAll:
 
 
 # ---------------------------------------------------------------------------
-# export_project()
+# export_project() / export_session()
 # ---------------------------------------------------------------------------
 
 PROJECT_ID = "11111111-0000-0000-0000-000000000000"
@@ -428,14 +428,19 @@ class TestExportProject:
             with pytest.raises(ExportError, match="does not support project export"):
                 self.client.export_project(PROJECT_ID)
 
-    def test_unknown_project_raises_http_error(self):
+    def test_unknown_or_unreadable_project(self):
         with patch("requests.get", return_value=export_response(404, {"detail": "Not found."})):
-            with pytest.raises(requests.HTTPError):
+            with pytest.raises(ExportError, match="project was not found, or you do not have read access"):
                 self.client.export_project(PROJECT_ID)
 
     def test_forbidden(self):
         with patch("requests.get", return_value=export_response(403, {"detail": "x"})):
-            with pytest.raises(ExportError, match="contributor"):
+            with pytest.raises(ExportError, match="permission to export this project"):
+                self.client.export_project(PROJECT_ID)
+
+    def test_unexpected_status_raises_http_error(self):
+        with patch("requests.get", return_value=export_response(500, {"detail": "x"})):
+            with pytest.raises(requests.HTTPError):
                 self.client.export_project(PROJECT_ID)
 
     def test_401_raises_authentication_error(self):
@@ -494,6 +499,58 @@ class TestExportProject:
         self.client._session.get = MagicMock(return_value=export_response(200, job("running")))
         with patch("time.sleep"), pytest.raises(ExportError, match=JOB_ID):
             self.client.export_project(PROJECT_ID, background=True, timeout=-1)
+
+
+SESSION_ID = "33333333-0000-0000-0000-000000000000"
+SESSION_EXPORT_URL = f"https://www.brainstem.org/api/private/stem/session/{SESSION_ID}/export/"
+SESSION_PAYLOAD = {
+    "export_info": {"format_version": "2.1", "scope": "session", "session_id": SESSION_ID,
+                    "project_id": None, "project_ids": [PROJECT_ID]},
+    "records": {"stem.session": [{"model": "stem.session", "pk": SESSION_ID, "fields": {}}]},
+}
+
+
+class TestExportSession:
+    def setup_method(self):
+        self.client = make_client()
+
+    def test_direct_export_uses_session_endpoint(self):
+        with patch("requests.get", return_value=export_response(200, SESSION_PAYLOAD)) as get:
+            result = self.client.export_session(SESSION_ID)
+        assert result == SESSION_PAYLOAD
+        assert get.call_args[0][0] == SESSION_EXPORT_URL
+
+    def test_background_export_polls_under_the_session(self):
+        gz = gzip.compress(json.dumps(SESSION_PAYLOAD).encode())
+        download_path = f"/api/private/stem/session/{SESSION_ID}/export-jobs/{JOB_ID}/download/"
+        self.client._session.post = MagicMock(return_value=export_response(202, job("pending")))
+        self.client._session.get = MagicMock(side_effect=[
+            export_response(200, job("completed", download_url=download_path,
+                                     file_sha256=hashlib.sha256(gz).hexdigest())),
+            export_response(200, content=gz, content_type="application/gzip"),
+        ])
+        with patch("time.sleep"):
+            result = self.client.export_session(SESSION_ID, background=True)
+        assert result == SESSION_PAYLOAD
+        assert self.client._session.post.call_args[0][0] == SESSION_EXPORT_URL
+        urls = [c[0][0] for c in self.client._session.get.call_args_list]
+        assert urls[0].endswith(f"/session/{SESSION_ID}/export-jobs/{JOB_ID}/")
+        assert urls[1] == "https://www.brainstem.org" + download_path
+
+    def test_errors_name_the_session(self):
+        with patch("requests.get", return_value=export_response(404, {"detail": "Not found."})):
+            with pytest.raises(ExportError, match="session was not found"):
+                self.client.export_session(SESSION_ID)
+        with patch("requests.get", return_value=export_response(404, content_type="text/html")):
+            with pytest.raises(ExportError, match="does not support session export"):
+                self.client.export_session(SESSION_ID)
+        with patch("requests.get", return_value=export_response(503, content_type="text/html")):
+            with pytest.raises(ExportError, match=r"export_session\(\.\.\., background=True\)"):
+                self.client.export_session(SESSION_ID)
+
+    def test_missing_id_raises(self):
+        with pytest.raises(ValueError, match="session_id"):
+            self.client.export_session("")
 
 
 # ---------------------------------------------------------------------------

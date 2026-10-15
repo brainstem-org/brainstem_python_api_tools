@@ -103,9 +103,9 @@ client.save('session', id='<session-uuid>', data={'description': 'updated'})
 client.delete('session', id='<session-uuid>')
 ```
 
-## Exporting a project
+## Exporting projects and sessions
 
-`export_project()` returns a whole project as one JSON-serializable dict. It is the same file as the JSON download on the BrainSTEM website (**Project → Download → JSON**). Use it for backups, NWB conversion, external integrations or analysis pipelines. You need contributor (change) access to the project.
+`export_project()` returns a whole project as one JSON-serializable dict. It is the same file as the JSON download on the BrainSTEM website (**Project → Download → JSON**). Use it for backups, NWB conversion, external integrations or analysis pipelines. You need read access to the project.
 
 ```python
 import json
@@ -120,21 +120,47 @@ with open('project_backup.json', 'w') as f:
     json.dump(export, f)
 ```
 
-Large projects can take longer than the server's 30-second request limit. For those, pass `background=True`: the server builds the export as a job, the client waits for it and downloads the result, and you also get an email when it is ready.
+### Session exports
+
+`export_session()` exports one session and everything it touches: the content of one NWB file. You need read access to one of the session's projects.
+
+```python
+export = client.export_session('<session-uuid>')
+```
+
+The file has the same format as a project export, with `export_info['scope'] == 'session'`. It contains:
+
+- the session with its data acquisitions, manipulations, behaviors and epochs;
+- the subjects and specimen sets linked to the session, with their full procedure and log history;
+- the session's projects you can read (`export_info['project_ids']`; a session can belong to several);
+- the lab resources, catalog entries and users these records reference.
+
+A subject's procedure history is complete, including procedures after the session, so filter by date where that matters.
+
+### Large exports
+
+Large exports can take longer than the server's 30-second request limit. For those, pass `background=True`: the server builds the export as a job, the client waits for it and downloads the result, and you also get an email when it is ready.
 
 ```python
 export = client.export_project('<project-uuid>', background=True)
+export = client.export_session('<session-uuid>', background=True)
 ```
 
-The export has this structure:
+### Format
+
+Both exports have this structure:
 
 ```text
 {
   "export_info": {
-    "format_version": "2.0",
+    "format_version": "2.1",
     "exported_at": "<ISO 8601 UTC timestamp>",
-    "project_id": "<project uuid>",
+    "scope": "project",              # or "session"
+    "project_id": "<project uuid>",  # null for a session export
+    "project_ids": ["<project uuid>", ...],
+    "session_id": null,              # the session's uuid for a session export
     "lab_resources": "<which lab resources are included>",
+    "restricted": {"personal_attributes.datastorage": [{"pk": "<uuid>", "name": "Lab server"}], ...},
     "record_count": 2344,
     "counts": {"stem.project": 1, "stem.subject": 21, ...}
   },
@@ -147,12 +173,12 @@ The export has this structure:
 }
 ```
 
-- `records` is keyed by model label (`app_label.model_name`). Every label is always present, with an empty list when the project has no such records.
-- Links to other records are primary keys. Many-to-many links are sorted lists of primary keys.
-- Lab resources (setups, data storages, equipment, protocols, ...) are included when you can read them and the project uses them. Two people exporting the same project can therefore get different lab resources.
+- `records` is keyed by model label (`app_label.model_name`). Every label is always present, with an empty list when there are no such records.
+- Links to other records are primary keys. Many-to-many links are sorted lists of primary keys. Referenced catalog entries (species, brain regions, suppliers, ...) and users (names only) are included in the file.
+- Lab resources (setups, data storages, equipment, protocols, ...) are included when you can read them and the exported records use them. Two people exporting the same project can therefore get different lab resources. Referenced lab resources you cannot read are listed by name in `export_info['restricted']`.
 - A minor format version (2.1, 2.2, ...) only adds labels and keys, so ignore any you don't recognise.
 
-Problems raise `ExportError` with a readable message, for example when you lack access, a background job fails, or the server doesn't support exports yet.
+Problems raise `ExportError` with a readable message, for example when the project or session doesn't exist or you can't read it, a background job fails, or the server doesn't support exports yet.
 
 ## Command-line Interface
 
