@@ -10,6 +10,8 @@ Usage examples
   brainstem load session --portal public --filters name.icontains=rat --sort -name
   brainstem load session --id <uuid>
   brainstem load session --limit 20 --offset 40
+  brainstem load session --per-page 20 --page 3
+  brainstem load session --all
   brainstem save session --data '{"name":"New","projects":["<uuid>"]}'
   brainstem save session --id <uuid> --data '{"description":"updated"}'
   brainstem delete session --id <uuid>
@@ -20,32 +22,50 @@ import json
 import os
 import sys
 
-from .brainstem_api_client import BrainstemClient, _MODEL_TO_APP, _TOKEN_FILE
+import requests
+
+from .brainstem_api_client import (
+    AuthenticationError, BrainstemClient, _MODEL_TO_APP, _TOKEN_FILE,
+)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    # Shared flags available on every subcommand
+def _common_flags(suppress_defaults: bool = False) -> argparse.ArgumentParser:
+    """Shared flags available before and after the subcommand.
+
+    The subcommand copies use ``argparse.SUPPRESS`` defaults so they do not
+    overwrite a flag given before the subcommand (``brainstem --url X load``).
+    """
+    def default(value):
+        return argparse.SUPPRESS if suppress_defaults else value
+
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--token",
-        default=os.environ.get("BRAINSTEM_API_TOKEN"),
+        default=default(os.environ.get("BRAINSTEM_API_TOKEN")),
         help="API token. Defaults to $BRAINSTEM_API_TOKEN or the cached token.",
     )
     common.add_argument(
         "--headless",
         action="store_true",
+        default=default(False),
         help="Print verification URL + code instead of opening a browser.",
     )
     common.add_argument(
         "--url",
-        default=None,
-        help="Base URL of the BrainSTEM server (default: https://www.brainstem.org/).",
+        default=default(os.environ.get("BRAINSTEM_API_URL")),
+        help="Base URL of the BrainSTEM server. Defaults to $BRAINSTEM_API_URL "
+             "or https://www.brainstem.org/.",
     )
+    return common
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    common = _common_flags(suppress_defaults=True)
 
     parser = argparse.ArgumentParser(
         prog="brainstem",
         description="BrainSTEM command-line API client.",
-        parents=[common],
+        parents=[_common_flags()],
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -87,8 +107,17 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="RELATION",
         help="Related models to embed.",
     )
-    p_load.add_argument("--limit", type=int, help="Max records (API max: 100).")
-    p_load.add_argument("--offset", type=int, help="Records to skip (pagination).")
+    p_load.add_argument("--limit", type=int,
+                        help="Records per page (sent as per_page; default 100).")
+    p_load.add_argument("--offset", type=int,
+                        help="Records to skip; must be a multiple of the page size.")
+    p_load.add_argument("--per-page", type=int, help="Records per page (default 100).")
+    p_load.add_argument("--page", type=int, help="Page number, starting at 1.")
+    p_load.add_argument(
+        "--all",
+        action="store_true",
+        help="Follow pagination and print all records merged into one JSON object.",
+    )
 
     # ---- save -------------------------------------------------------
     p_save = sub.add_parser("save", parents=[common], help="Create or update a record.")
@@ -129,8 +158,11 @@ def main():
     )
 
     if args.command == "login":
-        print(f"Token: {client._token}")
-        print(f"Cached at: {_TOKEN_FILE}")
+        if args.token:
+            print("Logged in with the token from --token / $BRAINSTEM_API_TOKEN "
+                  "(not cached).")
+        else:
+            print(f"Logged in. Token cached at {_TOKEN_FILE}")
         return
 
     if args.command == "load":
@@ -141,16 +173,39 @@ def main():
             k, v = expr.split("=", 1)
             filters[k] = v
 
-        resp = client.load(
-            args.model,
+        limit, offset = args.limit, args.offset
+        if args.per_page is not None or args.page is not None:
+            if limit is not None or offset is not None:
+                parser.error("Use either --per-page/--page or --limit/--offset, not both.")
+            if (args.per_page is not None and args.per_page < 1) or \
+                    (args.page is not None and args.page < 1):
+                parser.error("--per-page and --page must be at least 1.")
+            limit = args.per_page
+            if args.page is not None:
+                offset = (args.page - 1) * (args.per_page or 100)
+
+        load_kwargs = dict(
             portal=args.portal,
             id=args.id,
             filters=filters or None,
             sort=args.sort,
             include=args.include,
-            limit=args.limit,
-            offset=args.offset,
+            limit=limit,
+            offset=offset,
         )
+        if args.all:
+            try:
+                result = client.load(args.model, load_all=True, **load_kwargs)
+            except (ValueError, AuthenticationError, requests.HTTPError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(json.dumps(result, indent=2))
+            return
+
+        try:
+            resp = client.load(args.model, **load_kwargs)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     elif args.command == "save":
         try:

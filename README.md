@@ -30,10 +30,21 @@ For headless environments (no browser available):
 client = BrainstemClient(headless=True)  # prints a URL + code to enter manually
 ```
 
+To read public data without logging in (no token is sent; only `portal='public'` works):
+```python
+client = BrainstemClient(anonymous=True)
+client.load("project", portal="public", load_all=True)
+```
+
 To connect to a different server (e.g. a local development instance):
 ```python
 client = BrainstemClient(url="http://127.0.0.1:8000/")
 ```
+
+The client and the CLI also read two environment variables when no `token` / `url` is given:
+
+- `BRAINSTEM_API_TOKEN`: API token, used before the cached token.
+- `BRAINSTEM_API_URL`: server base URL (default `https://www.brainstem.org/`).
 
 > **Security note:** The cached token file is stored with owner-read-only permissions (`0600`). Treat it like a password and do not commit it to version control.
 
@@ -46,7 +57,7 @@ The tutorial demonstrates how to:
 
 - **Authenticate:** Load the client and authenticate via your browser.
 - **Load Data:** Load sessions and filter data using flexible options.
-- **Paginate:** Retrieve large datasets using `limit` / `offset` or `load_all=True`.
+- **Paginate:** Retrieve large datasets page by page (`limit` / `offset`) or all at once (`load_all=True`).
 - **Convenience Loaders:** Use `load_session()`, `load_subject()`, etc. for common queries.
 - **Update Entries:** Modify existing records and update them in the database.
 - **Create Entries:** Submit new data entries with required fields.
@@ -71,26 +82,32 @@ response = client.load(
     include=['projects'],
 )
 
-# Paginate results (manual)
+# Paginate results (manual). The API pages with page/per_page: limit is sent
+# as per_page (1 to 500, default 100) and offset is converted to a page number,
+# so offset must be a multiple of limit. Here: page 2 of 20 records.
 page2 = client.load('session', limit=20, offset=20).json()
+print(page2['meta'])  # {'page': 2, 'per_page': 20, 'total_results': ..., 'total_pages': ...}
 
-# Auto-paginate — fetches every page and returns a merged dict
+# Auto-paginate — fetches every page and returns a merged dict. Records of
+# sideloaded relations (include=[...]) are merged per key as well.
 all_sessions = client.load('session', load_all=True)
 
-# Convenience loaders — sensible defaults with named filter kwargs
-# load_session embeds dataacquisition, behaviors, manipulations, epochs
+# Convenience loaders — sensible defaults with named filter kwargs. Their
+# filters send the bare field (filter{projects}=<uuid>), which every server accepts.
+# load_session sideloads dataacquisition, behaviors, manipulations, epochs
 sessions = client.load_session(name='Rat', load_all=True)
 
-# load_subject embeds procedures and subjectlogs
+# load_subject sideloads procedures and subjectlogs
 subjects = client.load_subject(sex='M', projects='<project-uuid>', load_all=True)
 
-# load_project embeds sessions, subjects, collections, cohorts
+# load_project sideloads sessions, subjects, collections, cohorts
 projects = client.load_project(name='MyProject')
 
 # load_behavior / load_dataacquisition / load_manipulation scope by session UUID
 behaviors = client.load_behavior(session='<session-uuid>', load_all=True)
 
-# load_procedure scopes by subject UUID
+# load_procedure / load_subjectlog scope by subject UUID; load_procedurelog by
+# procedure, load_equipment by setup and load_strain by species UUID.
 procedures = client.load_procedure(subject='<subject-uuid>', load_all=True)
 
 # Create a record
@@ -99,9 +116,47 @@ client.save('session', data={'name': 'New session', 'projects': ['<project-uuid>
 # Update a record
 client.save('session', id='<session-uuid>', data={'description': 'updated'})
 
+# Sending a list field replaces the whole list. Lists read with include (and
+# the convenience loaders' default includes) hold only records you may read,
+# so read the record without include before changing one:
+session = client.load('session', id='<session-uuid>').json()['session']
+client.save('session', id='<session-uuid>',
+            data={'projects': session['projects'] + ['<project-uuid>']})
+
 # Delete a record
 client.delete('session', id='<session-uuid>')
 ```
+
+### Specimens, interfaces and materials
+
+Specimen sets and specimens (`stem`), experimental interfaces, material usages and specimen procedures/logs (`modules`), and anatomical regions (`taxonomies`) load like any other model:
+
+```python
+specimen_sets = client.load('specimenset', filters={'projects': '<project-uuid>'}, load_all=True)
+interfaces = client.load('experimentalinterface', load_all=True)
+```
+
+### Species, strains and brain regions
+
+```python
+# Search species and strains by common name as well as scientific name
+mice = client.load_species(popular_name='mouse').json()
+strains = client.load_strain(popular_name='black 6').json()
+
+# Brain regions are anatomical regions; find one by acronym, then list its subregions
+ca1 = client.load_anatomicalregion(acronym='CA1').json()['anatomical_regions'][0]
+subregions = client.load_anatomicalregion_descendants(ca1['id']).json()['anatomical_regions']
+for region in subregions:
+    print(region['depth'], region['acronym'], region['name'])
+```
+
+`brainregion` and `load_brainregion()` are deprecated names for `anatomicalregion` and `load_anatomicalregion()`. They still work, with a `FutureWarning`, and load anatomical regions.
+
+### Known limitations
+
+- Specimen-era models (specimen sets, specimens, experimental interfaces, material usages, anatomical regions, ...), `popular_name` and region descendants need a server with the specimen release. Older servers answer 404 for those models and 400 for a `popular_name` filter.
+- `offset` must be a multiple of the page size (`limit`, default 100), and a page holds at most 500 records. Use `load_all=True` to get everything.
+- Lists read with `include` show only the related records you may read; see the note on `save` above.
 
 ## Exporting projects and sessions
 
@@ -210,8 +265,12 @@ brainstem load session --filters name.icontains=Rat --sort -name --include proje
 # Load a single record by UUID
 brainstem load session --id <uuid>
 
-# Manual pagination
-brainstem load session --limit 20 --offset 20
+# Manual pagination (page 2, 20 records per page)
+brainstem load session --per-page 20 --page 2
+brainstem load session --limit 20 --offset 20   # equivalent
+
+# Fetch every page and print one merged JSON object
+brainstem load session --all
 
 # Public portal
 brainstem load project --portal public
@@ -231,7 +290,7 @@ brainstem save session --id <uuid> --data '{"description":"updated"}'
 brainstem delete session --id <uuid>
 ```
 
-All subcommands accept `--token`, `--headless`, and `--url` to override defaults.
+All subcommands accept `--token`, `--headless`, and `--url` to override defaults (`--token` and `--url` default to `$BRAINSTEM_API_TOKEN` and `$BRAINSTEM_API_URL`). `brainstem login` never prints the token; it reports where it is cached.
 
 ## Contributing
 Contributions are welcome! Feel free to open issues or submit pull requests on GitHub.
