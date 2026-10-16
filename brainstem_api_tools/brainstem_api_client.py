@@ -657,6 +657,32 @@ class BrainstemClient:
             raise ExportError(resp.json().get("detail", resp.reason))
         resp.raise_for_status()
 
+    # ------------------------------------------------------------------
+    # Agent reference
+    # ------------------------------------------------------------------
+
+    def agent_reference(self, page: str = "index.md") -> str:
+        """Return one page of the server's agent reference as text.
+
+        The server describes its own API and data model at ``/reference/`` (Markdown
+        pages such as ``rules.md``, ``resources/session.md`` or
+        ``guides/query-planning.md``, and JSON documents under ``data/``). It is
+        public, so this works with an anonymous client too.
+
+        Parameters
+        ----------
+        page : Page path relative to the reference root. Defaults to the index.
+        """
+        url = self._base_url + "reference/" + page.lstrip("/")
+        resp = self._session.get(url, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code == 404:
+            raise ValueError(
+                f"No agent reference page '{page}' on this server. The page does not exist, "
+                "or the server predates the agent reference."
+            )
+        resp.raise_for_status()
+        return resp.text
+
     def __enter__(self):
         return self
 

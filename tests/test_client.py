@@ -1154,6 +1154,23 @@ class TestCLICommands:
              patch("sys.argv", argv):
             cli_module.main()
 
+    def test_cli_reference_prints_page(self, capsys):
+        client = MagicMock()
+        client.agent_reference.return_value = "# rules"
+        with patch("brainstem_api_tools.cli.BrainstemClient", return_value=client) as factory, \
+             patch("sys.argv", ["brainstem", "reference", "rules.md"]):
+            import brainstem_api_tools.cli as cli_module
+            cli_module.main()
+        assert factory.call_args.kwargs["anonymous"] is True
+        client.agent_reference.assert_called_once_with("rules.md")
+        assert "# rules" in capsys.readouterr().out
+
+    def test_cli_reference_defaults_to_index(self, capsys):
+        client = MagicMock()
+        client.agent_reference.return_value = "# index"
+        self._run_cli(["brainstem", "--token", TOKEN, "reference"], client)
+        client.agent_reference.assert_called_once_with("index.md")
+
     def test_cli_load_calls_load(self, capsys):
         resp = mock_response(200, {"sessions": []})
         client = MagicMock()
@@ -1293,3 +1310,35 @@ class TestCLICommands:
                 cli_module.main()
         assert "multiple of limit" in capsys.readouterr().err
         client._session.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Agent reference
+# ---------------------------------------------------------------------------
+
+class TestAgentReference:
+    def test_fetches_page(self):
+        client = make_client()
+        resp = MagicMock(status_code=200, text="# rules")
+        with patch.object(client._session, "get", return_value=resp) as get:
+            assert client.agent_reference("rules.md") == "# rules"
+        assert get.call_args[0][0] == "https://www.brainstem.org/reference/rules.md"
+
+    def test_default_page_is_index(self):
+        client = make_client()
+        with patch.object(client._session, "get", return_value=MagicMock(status_code=200, text="x")) as get:
+            client.agent_reference()
+        assert get.call_args[0][0].endswith("/reference/index.md")
+
+    def test_unknown_page_raises_value_error(self):
+        client = make_client()
+        with patch.object(client._session, "get", return_value=MagicMock(status_code=404)):
+            with pytest.raises(ValueError, match="No agent reference page"):
+                client.agent_reference("nope.md")
+
+    def test_anonymous_client_reads_the_public_reference(self):
+        client = BrainstemClient(anonymous=True)
+        with patch.object(client._session, "get", return_value=MagicMock(status_code=200, text="# index")) as get:
+            assert client.agent_reference() == "# index"
+        assert "Authorization" not in client._session.headers
+        get.assert_called_once()

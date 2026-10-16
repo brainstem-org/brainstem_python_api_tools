@@ -136,6 +136,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_delete.add_argument("--portal", default="private")
     p_delete.add_argument("--id", required=True, help="UUID of the record to delete.")
 
+    # ---- reference --------------------------------------------------
+    p_reference = sub.add_parser(
+        "reference", parents=[common],
+        help="Print a page of the server's agent reference (API and data model description).",
+    )
+    p_reference.add_argument(
+        "page", nargs="?", default="index.md",
+        help="Page path, e.g. rules.md, resources/session.md, guides/query-planning.md (default: index.md).",
+    )
+
     return parser
 
 
@@ -149,6 +159,16 @@ def main():
             print(f"Logged out. Token removed from {_TOKEN_FILE}")
         else:
             print("No cached token found.")
+        return
+
+    if args.command == "reference":
+        # The reference is public: never start a login for it.
+        client = BrainstemClient(anonymous=True, url=getattr(args, "url", None))
+        try:
+            print(client.agent_reference(args.page))
+        except (ValueError, requests.HTTPError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     client = BrainstemClient(

@@ -235,6 +235,21 @@ Both exports have this structure:
 
 Problems raise `ExportError` with a readable message, for example when the project or session doesn't exist or you can't read it, a background job fails, or the server doesn't support exports yet.
 
+## Agent reference
+
+The server describes its own API and data model (resources, fields, relationships, JSON schemas, guides) at
+`/reference/`. It is written for AI agents, public, and needs no token:
+
+```python
+print(client.agent_reference())                            # index of all pages
+print(client.agent_reference("resources/session.md"))      # one resource
+print(client.agent_reference("guides/query-planning.md"))  # a guide
+```
+
+```bash
+brainstem reference rules.md
+```
+
 ## Command-line Interface
 
 After installation a `brainstem` command is available in your shell.
