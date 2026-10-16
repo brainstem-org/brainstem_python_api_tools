@@ -447,6 +447,31 @@ class TestDeviceAuthFlow:
             with pytest.raises(AuthenticationError, match="Authorization failed"):
                 client._device_auth_flow()
 
+    def test_http_error_with_json_error_raises_authentication_error(self):
+        """A 400 invalid_device_code (or 500 token_error) is reported as an
+        AuthenticationError, not as a bare requests.HTTPError."""
+        client = make_client()
+
+        device_resp = MagicMock()
+        device_resp.raise_for_status = MagicMock()
+        device_resp.json.return_value = {
+            "device_code": "dev123",
+            "user_code": "XYZ",
+            "verification_uri": "https://brainstem.org/activate",
+            "verification_uri_complete": "https://brainstem.org/activate?code=XYZ",
+            "interval": 0,
+        }
+        bad_resp = MagicMock()
+        bad_resp.ok = False
+        bad_resp.status_code = 400
+        bad_resp.raise_for_status.side_effect = requests.HTTPError("400")
+        bad_resp.json.return_value = {"error": "invalid_device_code"}
+
+        with patch("requests.post", side_effect=[device_resp, bad_resp]), \
+             patch("webbrowser.open"):
+            with pytest.raises(AuthenticationError, match="invalid_device_code"):
+                client._device_auth_flow()
+
 
 # ---------------------------------------------------------------------------
 # load_all auto-pagination

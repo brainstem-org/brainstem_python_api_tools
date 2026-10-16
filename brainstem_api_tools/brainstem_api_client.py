@@ -307,8 +307,18 @@ class BrainstemClient:
                 json={"device_code": device_code},
                 timeout=10,
             )
-            poll.raise_for_status()
-            result = poll.json()
+            # The server answers 400 (invalid_device_code) or 500 (token_error)
+            # with a JSON "error" key; report those as authentication failures
+            # rather than bare HTTP errors.
+            try:
+                result = poll.json()
+            except ValueError:
+                result = {}
+            if not poll.ok:
+                error = result.get("error") if isinstance(result, dict) else None
+                if error:
+                    raise AuthenticationError(f"Authorization failed: {error}")
+                poll.raise_for_status()
 
             if result.get("status") == "success":
                 return result["token"]
@@ -391,8 +401,9 @@ class BrainstemClient:
         if load_all and id is not None:
             raise ValueError("load_all=True cannot be used together with id.")
 
-        # The API paginates with page/per_page (limit/offset are ignored by
-        # the server), so translate limit/offset into those parameters.
+        # The API paginates with page/per_page (it also accepts limit/offset
+        # as aliases under the same multiple-of-page-size rule); translate
+        # limit/offset here so the request is explicit and validated early.
         page_size = 100 if limit is None else limit
         if load_all:
             page_size = min(page_size, self.MAX_PAGE_SIZE)
