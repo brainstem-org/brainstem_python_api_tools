@@ -743,13 +743,13 @@ class BrainstemClient:
         name     : Filter by project name (case-insensitive contains).
         sessions : Filter by session UUID.
         subjects : Filter by subject UUID.
-        tags     : Filter by numeric tag id (the server does not filter by tag name).
+        tags     : Filter by tag name (sent as ``filter{tags.name}``; records return tags as names).
         """
         return self._convenience_load(
             "project",
             default_include=["sessions", "subjects", "collections", "cohorts"],
             filter_map={"name": "name.icontains", "sessions": "sessions",
-                        "subjects": "subjects", "tags": "tags"},
+                        "subjects": "subjects", "tags": "tags.name"},
             portal=portal, id=id, filters=filters, sort=sort, include=include,
             limit=limit, offset=offset, load_all=load_all,
             name=name, sessions=sessions, subjects=subjects, tags=tags,
@@ -769,13 +769,13 @@ class BrainstemClient:
         projects : Filter by project UUID.
         strain   : Filter by strain UUID.
         sex      : Filter by sex (``'M'``, ``'F'``, or ``'U'``).
-        tags     : Filter by numeric tag id (the server does not filter by tag name).
+        tags     : Filter by tag name (sent as ``filter{tags.name}``; records return tags as names).
         """
         return self._convenience_load(
             "subject",
             default_include=["procedures", "subjectlogs"],
             filter_map={"name": "name.icontains", "projects": "projects",
-                        "strain": "strain", "sex": "sex", "tags": "tags"},
+                        "strain": "strain", "sex": "sex", "tags": "tags.name"},
             portal=portal, id=id, filters=filters, sort=sort, include=include,
             limit=limit, offset=offset, load_all=load_all,
             name=name, projects=projects, strain=strain, sex=sex, tags=tags,
@@ -794,13 +794,13 @@ class BrainstemClient:
         name        : Filter by session name (case-insensitive contains).
         projects    : Filter by project UUID.
         datastorage : Filter by data storage UUID.
-        tags        : Filter by numeric tag id (the server does not filter by tag name).
+        tags        : Filter by tag name (sent as ``filter{tags.name}``; records return tags as names).
         """
         return self._convenience_load(
             "session",
             default_include=["dataacquisition", "behaviors", "manipulations", "epochs"],
             filter_map={"name": "name.icontains", "projects": "projects",
-                        "datastorage": "datastorage", "tags": "tags"},
+                        "datastorage": "datastorage", "tags": "tags.name"},
             portal=portal, id=id, filters=filters, sort=sort, include=include,
             limit=limit, offset=offset, load_all=load_all,
             name=name, projects=projects, datastorage=datastorage, tags=tags,
@@ -816,12 +816,12 @@ class BrainstemClient:
         Parameters
         ----------
         name : Filter by collection name (case-insensitive contains).
-        tags : Filter by numeric tag id (the server does not filter by tag name).
+        tags : Filter by tag name (sent as ``filter{tags.name}``; records return tags as names).
         """
         return self._convenience_load(
             "collection",
             default_include=["sessions"],
-            filter_map={"name": "name.icontains", "tags": "tags"},
+            filter_map={"name": "name.icontains", "tags": "tags.name"},
             portal=portal, id=id, filters=filters, sort=sort, include=include,
             limit=limit, offset=offset, load_all=load_all,
             name=name, tags=tags,
@@ -837,12 +837,12 @@ class BrainstemClient:
         Parameters
         ----------
         name : Filter by cohort name (case-insensitive contains).
-        tags : Filter by numeric tag id (the server does not filter by tag name).
+        tags : Filter by tag name (sent as ``filter{tags.name}``; records return tags as names).
         """
         return self._convenience_load(
             "cohort",
             default_include=["subjects"],
-            filter_map={"name": "name.icontains", "tags": "tags"},
+            filter_map={"name": "name.icontains", "tags": "tags.name"},
             portal=portal, id=id, filters=filters, sort=sort, include=include,
             limit=limit, offset=offset, load_all=load_all,
             name=name, tags=tags,

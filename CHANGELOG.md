@@ -18,6 +18,9 @@ Server requirements: BrainSTEM with the `specimen-1` data model, the project/ses
 - `limit`/`offset` and `--per-page`/`--page` paging, `load_all=True` merging of sideloaded lists.
 
 ### Changed
+- The `tags` filter of `load_project`, `load_subject`, `load_session`, `load_collection` and
+  `load_cohort` filters by tag name
+  (`filter{tags.name}`), which the server now supports; tag ids were never returned by the API.
 - Device-flow errors returned by the server with a non-2xx status (`invalid_device_code`,
   `token_error`) raise `AuthenticationError` instead of `requests.HTTPError`.
 
