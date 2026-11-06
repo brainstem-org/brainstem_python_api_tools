@@ -134,3 +134,28 @@ if response.status_code == 204:
 
 ## Request the public data by defining the portal to be public
 output4 = client.load("project", portal="public").json()
+
+
+# Public data without logging in
+
+## An anonymous client sends no token; only the public portal works with it.
+public_client = BrainstemClient(anonymous=True)
+public_projects = public_client.load("project", portal="public", load_all=True)
+
+
+# Exporting a project or a session
+
+## An export is one JSON document (format 2.1) with every record of the project
+## or session you may read. Pass background=True for large projects: the server
+## builds the file as a job and the client waits for it.
+export = client.export_project("<YOUR_PROJECT_UUID>")
+print(export["export_info"]["record_count"], "records")
+session_export = client.export_session("<YOUR_SESSION_UUID>", background=True)
+
+
+# The agent reference
+
+## The server describes its own API and data model in Markdown pages, written
+## for AI agents and readable without a token.
+print(client.agent_reference("index.md"))
+print(client.agent_reference("resources/session.md"))
