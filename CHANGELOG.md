@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.0 (unreleased)
+## 2.1.0 (2026-11-07)
 
 Server requirements: BrainSTEM with the `specimen-1` data model, the project/session export API
 (format 2.1) and the public agent reference (`/reference/`, format 1.x).
