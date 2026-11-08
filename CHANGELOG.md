@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.1 (unreleased)
+## 2.1.1 (2026-11-08)
 
 ### Removed
 - The models `dataacquisitionprocedure` and `admingroup`: BrainSTEM no longer serves them, so loading them
