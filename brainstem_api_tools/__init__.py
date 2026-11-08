@@ -1,3 +1,3 @@
 from .brainstem_api_client import BrainstemClient, ModelType, PortalType, AuthenticationError, ExportError
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"

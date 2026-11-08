@@ -208,7 +208,7 @@ Both exports have this structure:
 ```text
 {
   "export_info": {
-    "format_version": "2.1",
+    "format_version": "2.2",
     "exported_at": "<ISO 8601 UTC timestamp>",
     "scope": "project",              # or "session"
     "project_id": "<project uuid>",  # null for a session export
