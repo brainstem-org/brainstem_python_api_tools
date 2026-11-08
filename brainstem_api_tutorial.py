@@ -145,7 +145,7 @@ public_projects = public_client.load("project", portal="public", load_all=True)
 
 # Exporting a project or a session
 
-## An export is one JSON document (format 2.1) with every record of the project
+## An export is one JSON document (format 2.x) with every record of the project
 ## or session you may read. Pass background=True for large projects: the server
 ## builds the file as a job and the client waits for it.
 export = client.export_project("<YOUR_PROJECT_UUID>")

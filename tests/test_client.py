@@ -248,7 +248,7 @@ class TestLoad:
             "experimentalinterface", "experimentalinterfacetemplate", "materialusage",
             "materialusagetemplate", "specimenprocedure", "specimenproceduretemplate",
             "specimenlog", "dataacquisitioninterface", "manipulationinterface",
-            "dataacquisitionprocedure", "proceduretemplate", "dataacquisitiontemplate",
+            "proceduretemplate", "dataacquisitiontemplate",
             "manipulationtemplate", "procedureepisode", "procedureepisodetemplate",
             "episodepersonnel"]],
         *[(m, "taxonomies") for m in [
@@ -260,6 +260,11 @@ class TestLoad:
         self._mock_get()
         self.client.load(model)
         assert f"/api/private/{expected_app}/{model}/" in self.client._session.get.call_args[0][0]
+
+    @pytest.mark.parametrize("model", ["dataacquisitionprocedure", "admingroup"])
+    def test_resources_the_server_removed_are_unknown(self, model):
+        with pytest.raises(ValueError, match="Unknown model"):
+            self.client.load(model)
 
     def test_load_invalid_portal_raises(self):
         with pytest.raises(ValueError, match="Unknown portal"):
@@ -280,7 +285,6 @@ class TestLoad:
             self.client.load(ModelType[old])
 
     @pytest.mark.parametrize("model,app", [
-        ("admingroup", "users"),
         ("speciesapproval", "taxonomies"),
         ("supplierapproval", "resources"),
         ("publicationapproval", "dissemination"),

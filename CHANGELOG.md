@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.1 (unreleased)
+
+### Removed
+- The models `dataacquisitionprocedure` and `admingroup`: BrainSTEM no longer serves them, so loading them
+  now raises "Unknown model" instead of requesting a route that returns 404.
+
+### Changed
+- Documentation describes exports as format 2.x; www.brainstem.org writes 2.2, in which recordings link to
+  biology through experimental interfaces only. The client reads any 2.x export unchanged.
+
 ## 2.1.0 (2026-11-07)
 
 Server requirements: BrainSTEM with the `specimen-1` data model, the project/session export API

@@ -41,7 +41,6 @@ _MODEL_TO_APP: dict = {
     "consumablestock": "modules",
     "dataacquisition": "modules",
     "dataacquisitioninterface": "modules",
-    "dataacquisitionprocedure": "modules",
     "dataacquisitiontemplate": "modules",
     "episodepersonnel": "modules",
     "equipment": "modules",
@@ -109,7 +108,6 @@ _MODEL_TO_APP: dict = {
     "publication": "dissemination",
     "publicationapproval": "dissemination",
     # users
-    "admingroup": "users",
     "group": "users",
     "groupmembershipinvitation": "users",
     "groupmembershiprequest": "users",
@@ -136,7 +134,7 @@ ModelType = Enum(  # type: ignore[misc]
     "ModelType", {k: k for k in [*_MODEL_TO_APP, *_MODEL_ALIASES]}
 )
 
-_VALID_PORTALS = {"private", "public", "super"}
+_VALID_PORTALS = {"private", "public"}
 
 
 def _resolve_model(model) -> str:
@@ -174,7 +172,6 @@ def _resolve_portal(portal) -> str:
 class PortalType(Enum):
     public = "public"
     private = "private"
-    super = "super"
 
 
 # ---------------------------------------------------------------------------
